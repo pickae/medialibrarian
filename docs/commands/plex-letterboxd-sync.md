@@ -9,7 +9,7 @@ Letterboxd lacks is written to a CSV for its importer.
 
 | At a glance | |
 | --- | --- |
-| **Takes** | a Letterboxd data export, or an account name; `plexUrl` and `plexToken` |
+| **Takes** | a Letterboxd data export, or an account name; `plexUrl` and `plexToken` — or, with `mediaServer=jellyfin`, `jellyfinUrl`, `jellyfinApiKey` and `jellyfinUser` ([below](#on-jellyfin)) |
 | **Writes** | the import CSV and the state file ([below](#default-behavior)) |
 | **Input** | marks films played, rates them and adds to the watchlist in Plex; `-p` previews instead |
 | **Network** | the Plex server, plex.tv (the watchlist), Letterboxd's RSS feed when given an account, TheMovieDB when `tmdbApiKey` is set, and, under `-A`, a configured language model when `letterboxdMatchLlm` is on |
@@ -67,6 +67,27 @@ from Letterboxd.
   watched comes off both watchlists by itself.
 - **The feed has no watchlist.** Letterboxd's watchlist is read from the
   export only.
+
+### On Jellyfin
+
+With `mediaServer=jellyfin` the same run keeps a Jellyfin server in step
+instead, reached with `jellyfinUrl`, `jellyfinApiKey` and `jellyfinUser`
+(`-a` names another user). What differs:
+
+- **The day a film was watched does reach Jellyfin**: a film marked played
+  gets the day of its last Letterboxd diary entry, or the day it was logged.
+- **Only the last play is known.** Jellyfin keeps no play history, only when
+  a film was last played. Each run sends that day to Letterboxd if it is new,
+  and the state remembers every day it has seen; two plays of one film between
+  two runs are one diary entry. A day the run stamped itself, by marking a
+  film played, is never sent back.
+- **The rating is kept but not shown.** Jellyfin stores the user's 0–10 rating,
+  so it goes both ways exactly, but its own player does not display it.
+- **No watchlist.** Jellyfin has none; the watchlist steps are left out.
+- **The whole library is read every run** (one request a library), so a film
+  removed or marked unplayed is seen at once; `-f` changes nothing.
+- The state file defaults to `data/jellyfin-letterboxd-state.json`, apart
+  from Plex's.
 
 ### Rows sent and not uploaded yet
 

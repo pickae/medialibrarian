@@ -11,7 +11,7 @@ transcribed commentaries and the chapters the disc had.
 | --- | --- |
 | **Takes** | one or more folders of films |
 | **Writes** | in place: the improved `.mkv` and `.srt` sidecars (the converted lossless audio is made in RAM and only ever lands inside the improved `.mkv`); the sweeps also write lists under `logs/ingest-movies/` |
-| **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
+| **Input** | changed — that is the job; each remuxed original is kept as `<name> - old.mkv` |
 | **Reruns** | a film that already has its `(old)` backup is not remuxed again |
 | **Network** | TMDb, OpenSubtitles, SubDL, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter — and your own Plex server |
 
@@ -29,7 +29,7 @@ given (one level deep, not the whole tree):
 - **finds commentaries the file does not flag** and flags them before anything else reads the tracks ([details](#commentaries-the-file-does-not-flag))
 - **reads picture subtitles into text** where a language has no text subtitle (needs `seconv`) ([details](#picture-subtitles-read-into-text))
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
-- **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
+- **remuxes each film once into an improved copy**, keeping the original as `<name> - old.mkv` ([details](#what-a-full-ingest-does))
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
 - last, **compares each film with the copy your Plex library already has**, if any ([details](#plex-comparison))
 - with `-r`, after all of that, **converts the remuxes** and writes each converted copy beside its film ([details](#remux-conversion--r))
@@ -63,7 +63,8 @@ These are read from the environment:
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
 | `spokenLanguages` | the languages whose subtitles are fetched and tested; a code the language table does not know stops the run before a film is touched | the six it knows by default (en, de, fr, nl, es, it) |
 | `subtitleAdsLlm` | whether a subtitle in a language subcleaner has no word list for (or when subcleaner is absent) is handed to a language model (`subtitle-ads`, see [docs/models.md](../models.md)): its first and last 20 cues are sent | `on` |
-| `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
+| `mediaServer` | the media server the library is kept for — `plex` or `jellyfin`: the one the library comparison reads, and the one the names are written for | `plex` |
+| `mediaServerNaming` | the server the names are written for, where it is not `mediaServer` | `mediaServer`; the names are then written and read the way that server spells them |
 | `subtitleOcrEngines` | the engines a picture subtitle is read with, in the order to try them | the order below |
 | `llmModels`, `llmUrl`, … | the language-model roster (see [Language models](../models.md)): a model that sees pictures serves the `vision` OCR engine (`subtitle-ocr` task) | `vision` is not tried; paddle and tesseract still are |
 | `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
@@ -400,7 +401,7 @@ file reporting what its bitstream really is. A file whose RPU is really there is
 only checked, never rewritten, and a copy that came out less HDR than the source
 is thrown away and the original left alone.
 
-The original is preserved as `<name> (old).mkv`, so nothing is lost and a rerun
+The original is preserved as `<name> - old.mkv`, so nothing is lost and a rerun
 is a no-op — which is also what makes the Dolby Vision work a one-time job per
 film: a film that already has its `(old)` backup is not remuxed again. Once the
 copy has stood the checks, [`-O backups`](#dropping-the-old-backups) drops that
@@ -817,6 +818,17 @@ A transcript already beside a film is left alone, with two exceptions:
   name still says which commentary it is. The srt itself is left untouched, and
   the renumbered sidecar is judged by the size rule like any other.
 
+A transcript is named after the whole name of the film file it belongs to —
+title, year, id tag and edition — then a dot, the track's number and name,
+and its language: `<film>.<track> <track name>.<language>.srt`, for example
+`Rivertown (2049) [imdbid-tt0000001] - Director's Cut.2 Commentary with the
+Director.en.srt`. Jellyfin shows `2 Commentary with the Director` as that
+version's subtitle title, and offers the commentary's `.opus` extract, named
+the same way, as an extra audio track; Plex reads no title from a sidecar's
+name either way. Transcripts an older run wrote with a space instead of the
+dot are still found, and the tagging renames them in place — none is
+transcribed again.
+
 ## Commentary names
 
 **`-O names` names numbered commentary tracks.** A rip often calls its commentaries
@@ -935,8 +947,9 @@ the run does without it. Needs `curl`.
 
 **Is the film already in the library, and which copy is better?** The full
 ingest asks this last, once each film is the file it will stay; `-O plex` asks it
-alone, of every film under the folders given. The server is `plexUrl`, or else
-the one on this machine; the library is read once per run. A film is found by
+alone, of every film under the folders given. The server is the one
+`mediaServer` names — Plex at `plexUrl`, or Jellyfin at `jellyfinUrl`, each
+else the one on this machine; the library is read once per run. A film is found by
 its id tag — Plex keeps the IMDb and TMDb ids of every film it matched — or, for
 one the tagging could not name, by its title and year. A copy in the film's own
 folder is the film itself, or a version kept beside it on purpose, and does not
@@ -1067,7 +1080,7 @@ and an unfinished one is redone.
 
 **`-O backups` drops the `(old)` originals the improved copies were kept beside, and
 nothing else.** It is the end of the remux's work: a film whose original still
-stands beside it as `<name> (old).mkv` is asked about its copy, and the backup
+stands beside it as `<name> - old.mkv` is asked about its copy, and the backup
 goes where the copy is the whole of the original.
 
 The copy is asked three things:

@@ -39,10 +39,10 @@ from medialib.lib import (
     chapterdb,
     commentarytranscription,
     diskturn,
+    mediaserver,
     plexcarry,
     plexcompare,
     plexnames,
-    plexserver,
     safety,
     toolcapture,
 )
@@ -117,14 +117,14 @@ class LibraryCarry:
         self._looking.start()
 
     def _look(self) -> None:
-        server = plexserver.local()
+        provider = mediaserver.provider()
+        server = provider.local()
         try:
             copies = server.copies()
-        except plexserver.PlexError as error:
+        except mediaserver.MediaServerError as error:
             self._said.append(
-                "Plex carry-over: SKIPPED, the server could not be asked (%s)%s"
-                % (error, "" if server.token
-                   else " - set plexToken to that server's X-Plex-Token"))
+                "%s carry-over: SKIPPED, the server could not be asked (%s) - %s"
+                % (provider.display, error, provider.hint()))
             return
         index = plexphase._index(copies)
         for movie in self._films():
@@ -133,7 +133,8 @@ class LibraryCarry:
             try:
                 self._look_up(movie, index, copies)
             except Exception as error:  # noqa: BLE001 - one film, not the run
-                self._said.append("Plex carry-over: WARNING, %s could not be "
+                self._said.append(mediaserver.provider().display
+                                  + " carry-over: WARNING, %s could not be "
                                   "looked up: %s" % (movie, error))
 
     def _look_up(self, movie: str, index: dict, copies: list) -> None:

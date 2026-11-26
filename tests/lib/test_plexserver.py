@@ -6,7 +6,7 @@ XML a real server answered it with."""
 
 import pytest
 
-from medialib.lib import plexserver
+from medialib.lib import mediaserver, plexserver
 from medialib.lib.filmmatch import Film
 
 pytestmark = pytest.mark.pure
@@ -79,7 +79,7 @@ def test_the_films_carry_their_ids_rating_and_play_days(curl):
     assert played.film == Film(
         "Watch Out, the Boss Is Back!", "1991", tmdb="4242", imdb="tt0101000",
         aliases=("Achtung, der Chef",), rating=7,
-        dates=(plexserver._day("1600000000"), plexserver._day("1700000000")))
+        dates=(mediaserver.day_of("1600000000"), mediaserver.day_of("1700000000")))
     assert unplayed == plexserver.Movie("12", Film("Lantern", "2007"), False, "Films")
 
 
@@ -163,7 +163,7 @@ def test_a_film_is_found_in_plex_s_catalogue_by_its_tmdb_id(curl, monkeypatch):
 def test_another_account_s_plays_when_asked(curl):
     server = plexserver.Server("http://plex:32400", "t", account="2")
     lantern = [movie for movie in server.movies() if movie.key == "12"][0]
-    assert lantern.film.dates == (plexserver._day("1700000000"),)
+    assert lantern.film.dates == (mediaserver.day_of("1700000000"),)
     assert 'accountID=2' in " ".join(curl)
 
 

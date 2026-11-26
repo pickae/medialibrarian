@@ -114,7 +114,7 @@ class TestAfterTheSwap:
         run.Run(fragments_file="")._after_carrying(
             base + ".mkv", base, inputs, order, slots)
         assert calls == [["mkvextract", base + ".mkv", "tracks",
-                          "6:%s 4 With the director.en.srt" % base]]
+                          "6:%s.4 With the director.en.srt" % base]]
         assert not opus.exists()
 
 
@@ -202,7 +202,7 @@ class TestSettling:
                     "1", Film("Film", "2006", imdb="tt0000001"), "Films", "",
                     (str(old),))]
 
-        monkeypatch.setattr(carryphase.plexserver, "local", Server)
+        monkeypatch.setattr(plexserver, "local", Server)
         monkeypatch.setattr(carryphase.plexcompare, "read_profile",
                             lambda path, edition="": new_profile
                             if path == str(movie) else old_profile)

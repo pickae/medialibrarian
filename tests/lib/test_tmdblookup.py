@@ -1335,7 +1335,7 @@ class TestTagPlexIds:
             "The Movie (1999) {imdb-tt0000001} {edition-Colorized}.mkv",
             "The Movie (1999) {imdb-tt0000001} {edition-Colorized}.nl.srt",
             "The Movie (1999) {imdb-tt0000001} "
-            "{edition-Original Mono Track} 2 Commentary.srt",
+            "{edition-Original Mono Track}.2 Commentary.srt",
             "The Movie (1999) {imdb-tt0000001} "
             "{edition-Original Mono Track}.en.srt",
             "The Movie (1999) {imdb-tt0000001} "
@@ -3560,7 +3560,7 @@ class TestANameThatWillNotFit:
         cut = [entry.name for entry in tagged.iterdir()
                if entry.name.endswith(".en.srt")]
         assert len(cut) == 1
-        assert cut[0].startswith("%s %s 2 Commentary by" % (self.FOLDER,
+        assert cut[0].startswith("%s %s.2 Commentary by" % (self.FOLDER,
                                                             self.TAG))
         assert long_names.refused == []
         assert [target for _path, target in long_names.cropped] == cut

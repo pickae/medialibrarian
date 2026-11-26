@@ -1,5 +1,9 @@
-"""plex-letterboxd-sync: what was watched, when, and how it was rated, kept
-in step between a Plex server's movie libraries and a Letterboxd account.
+"""letterboxd-sync (also plex-letterboxd-sync): what was watched, when, and
+how it was rated, kept in step between a media server's movie libraries and a
+Letterboxd account. The server is the one the ``mediaServer`` setting names -
+Plex unless it says Jellyfin - and what it cannot do (a watchlist, a play
+history, a day for a film marked played) its provider's capabilities say;
+Plex is what the notes below describe.
 
 The two directions are not alike, because Letterboxd takes nothing but a file:
 
@@ -33,6 +37,7 @@ from medialib.lib import (
     ailetterboxd,
     clioptions,
     letterboxd,
+    mediaserver,
     plexserver,
     runlog,
     settings,
@@ -52,32 +57,37 @@ Argument:
                         account's name, whose public RSS feed holds only the
                         fifty or so most recent diary entries.
 Environment:
+    mediaServer         The server: plex (the default) or jellyfin.
     plexUrl             The Plex server, e.g. http://192.168.1.10:32400
     plexToken           Its X-Plex-Token.
+    jellyfinUrl         The Jellyfin server, e.g. http://192.168.1.10:8096
+    jellyfinApiKey      An API key it made (Dashboard > API Keys).
+    jellyfinUser        The user whose films these are.
 Options:"""
 
 OPT_SPEC = """
-s | <names> | Only the Plex movie libraries with these titles,
+s | <names> | Only the server's movie libraries with these titles,
                     comma-separated. Default: every movie library.
-l |  | Letterboxd -> Plex only: mark films played and rated, and
+l |  | Letterboxd -> server only: mark films played and rated, and
                     write no CSV.
 o | <file> | Write the CSV for Letterboxd's importer to <file>. Default:
                     logs/letterboxd-import-<date>.csv in the medialib data
                     directory.
 S | <file> | Remember what Letterboxd has, and what was sent to it, in
-                    <file>, and keep a copy of the Plex library beside it, so
-                    the next run reads only what changed. Default:
-                    data/plex-letterboxd-state.json in the medialib data
-                    directory.
-a | <id> | Read the plays of the Plex account with this number on the
-                    server rather than its owner's (1). The numbers are listed
-                    at <plexUrl>/accounts.
-f |  | Read the whole Plex library rather than what changed since the
+                    <file>, and keep a copy of the server's library beside it,
+                    so the next run reads only what changed. Default:
+                    data/<server>-letterboxd-state.json in the medialib data
+                    directory, e.g. data/plex-letterboxd-state.json.
+a | <id> | Read the plays of this account rather than the default one:
+                    on Plex its number on the server, rather than its owner's
+                    (1) - the numbers are listed at <plexUrl>/accounts; on
+                    Jellyfin a user's name, rather than jellyfinUser.
+f |  | Read the whole library rather than what changed since the
                     last run - which a run also does by itself once a week, to
                     see films removed or marked unplayed.
 p |  | Preview: say what would be marked, rated, added and
-                    exported, and change nothing - not Plex, not the CSVs, not
-                    the state file. The copy of the Plex library is kept.
+                    exported, and change nothing - not the server, not the
+                    CSVs, not the state file. The copy of the library is kept.
 h |  | Print this help page.
 """
 
@@ -86,9 +96,7 @@ OPT_VARS = ("s:sections l:toPlexOnly o:outOverride S:stateOverride a:account "
 OPT_COLUMN = 20
 OPT_LONG = ("s:sections l:to-plex-only o:output S:state a:account f:full "
             "p:preview h:help")
-OPT_CHECKS = """
-a | nonNegInt | account number
-"""
+OPT_CHECKS = ""
 
 
 def spec(program: str) -> clioptions.Spec:
@@ -389,20 +397,20 @@ def _wanted_in_plex(server, film: Film) -> bool:
                         "watchlist" % (film,))
             return True
         server.add_to_watchlist(key)
-    except plexserver.PlexError as error:
+    except mediaserver.MediaServerError as error:
         runlog.error("%s: %s" % (film, error))
         return False
     return True
 
 
-def report_watchlist(wishes: Wishes, to_plex_only: bool) -> None:
-    runlog.result("Watchlist, Letterboxd -> Plex: %d film(s) to add"
-                  % len(wishes.to_plex))
+def report_watchlist(wishes: Wishes, to_plex_only: bool, server: str = "Plex") -> None:
+    runlog.result("Watchlist, Letterboxd -> %s: %d film(s) to add"
+                  % (server, len(wishes.to_plex)))
     for film in wishes.to_plex:
         runlog.result("  " + str(film))
     if not to_plex_only:
-        runlog.result("Watchlist, Plex -> Letterboxd: %d film(s) to import"
-                      % len(wishes.to_letterboxd))
+        runlog.result("Watchlist, %s -> Letterboxd: %d film(s) to import"
+                      % (server, len(wishes.to_letterboxd)))
         for film in wishes.to_letterboxd:
             runlog.result("  " + str(film))
 
@@ -431,27 +439,29 @@ def _row_said(row: Row) -> str:
 
 
 def report(result: Plan, to_plex_only: bool,
-           suggestions: Sequence[ailetterboxd.Suggestion] = ()) -> None:
-    runlog.result("Letterboxd -> Plex: %d film(s) to mark played, %d to rate"
-                  % (len(result.mark), len(result.rate)))
+           suggestions: Sequence[ailetterboxd.Suggestion] = (),
+           server: str = "Plex") -> None:
+    runlog.result("Letterboxd -> %s: %d film(s) to mark played, %d to rate"
+                  % (server, len(result.mark), len(result.rate)))
     for movie, found in result.mark:
         runlog.result("  " + _said(movie.film, found))
         runlog.detail("    matched by %s" % found.how)
     for movie, rating in result.rate:
         runlog.result("  %s: %s" % (movie.film, _stars(rating)))
     if result.ambiguous:
-        runlog.warn("%d unplayed Plex film(s) match more than one Letterboxd "
-                    "film, and are left unmarked:" % len(result.ambiguous))
+        runlog.warn("%d unplayed %s film(s) match more than one Letterboxd "
+                    "film, and are left unmarked:" % (len(result.ambiguous), server))
         for film, found in result.ambiguous:
             runlog.warn("  %s - %s" % (film, "; ".join(map(str, found.ambiguous))))
     if result.disagree:
         runlog.warn("%d film(s) are rated differently on the two sides, and "
                     "neither rating is changed:" % len(result.disagree))
         for plex, theirs in result.disagree:
-            runlog.warn("  %s: Plex %s, Letterboxd %s"
-                        % (plex, _stars(plex.rating), _stars(theirs.rating)))
+            runlog.warn("  %s: %s %s, Letterboxd %s"
+                        % (plex, server, _stars(plex.rating), _stars(theirs.rating)))
     if not to_plex_only:
-        runlog.result("Plex -> Letterboxd: %d row(s) to import" % len(result.rows))
+        runlog.result("%s -> Letterboxd: %d row(s) to import"
+                      % (server, len(result.rows)))
         for row in result.rows:
             runlog.result(_row_said(row))
     if suggestions:
@@ -493,18 +503,29 @@ def main(argv: list, program: str = "plex-letterboxd-sync",
     to_plex_only = "l" in result.given
     sections = tuple(name.strip() for name in
                      (values["sections"] or "").split(",") if name.strip())
+    try:
+        provider = mediaserver.provider()
+    except clioptions.UsageError as error:
+        clioptions.refuse_usage(declaration, error.message)
+        return 1
+    account = values["account"] or ""
+    if provider.name == plexserver.NAME and account and not account.isdigit():
+        clioptions.refuse_usage(declaration, "-a takes the Plex account's number, "
+                                             'not "%s".' % account)
+        return 1
+    name = provider.display
     script_dir = script_dir or commands.script_dir()
     state_path = values["stateOverride"] or os.path.join(
-        script_dir, "data", "plex-letterboxd-state.json")
+        script_dir, "data", "%s-letterboxd-state.json" % provider.name)
     today = datetime.date.today().isoformat()
     out_path = values["outOverride"] or commands.logs_file(
         script_dir, "letterboxd-import-%s.csv" % today)
 
     if tooldeps.require_tools(program, ["curl"]):
         return 1
-    server = plexserver.from_environment(values["account"] or plexserver.OWNER)
+    server = provider.from_settings(account)
     if server is None:
-        runlog.error("Set plexUrl and plexToken to the Plex server and its token.")
+        runlog.error("%s cannot be reached: %s." % (name, provider.hint()))
         return 1
 
     try:
@@ -537,22 +558,28 @@ def main(argv: list, program: str = "plex-letterboxd-sync",
         runlog.log("%d watchlist film(s) sent earlier are not on Letterboxd's "
                    "watchlist yet, and are not sent again" % len(wanted_waiting))
 
-    cache_path = os.path.splitext(state_path)[0] + "-plex.json"
+    cache_path = os.path.splitext(state_path)[0] + "-%s.json" % provider.name
+    able = provider.capabilities
     try:
         library = server.library(_read_cache(cache_path), "f" in result.given)
         movies = [movie for movie in library.movies
                   if not sections or movie.section in sections]
-        runlog.log("Plex: %d film(s), %s" % (len(movies), "read whole"
+        runlog.log("%s: %d film(s), %s" % (name, len(movies), "read whole"
                    if library.whole else "changes since the last run read"))
         films, unnamed = name_films(films, library.movies, state.unnamed)
         result_plan = plan(movies, films, waiting, to_plex_only)
-        # Report only: model suggestions never alter result_plan, Plex, CSVs or state.
+        # Report only: model suggestions never alter result_plan, the server,
+        # CSVs or state.
         suggestions = ailetterboxd.suggest_for_sync(
             movies, films, result_plan.ambiguous)
-        report(result_plan, to_plex_only, suggestions)
-        wishes = plan_watchlist(library.watchlist, lb_watchlist, films,
-                                library.movies, wanted_waiting, to_plex_only)
-        report_watchlist(wishes, to_plex_only)
+        report(result_plan, to_plex_only, suggestions, name)
+        if able.watchlist:
+            wishes = plan_watchlist(library.watchlist, lb_watchlist, films,
+                                    library.movies, wanted_waiting, to_plex_only)
+            report_watchlist(wishes, to_plex_only, name)
+        else:
+            wishes = Wishes([], [])
+            runlog.log("Watchlist: %s keeps none - left out" % name)
         if simulate:
             # The copy of the library is kept even so: it is what Plex said,
             # not anything this run would change, and keeping it is what makes
@@ -561,20 +588,26 @@ def main(argv: list, program: str = "plex-letterboxd-sync",
             runlog.log("Preview - nothing was changed.")
             return 0
         failed = 0
-        for movie, _found in result_plan.mark:
-            if _changed(movie, server.mark_played, movie):
-                plexserver.updated(library.cache, movie._replace(played=True))
+        for movie, found in result_plan.mark:
+            # The last day Letterboxd has it watched - or, logged with no
+            # diary entry, the day it was logged - where the server keeps one.
+            day = (max(found.film.dates, default="") or found.film.logged) \
+                if able.dated_marks and found.film is not None else ""
+            stamped = _changed(movie, server.mark_played, movie, day)
+            if stamped is not None:
+                mediaserver.updated(library.cache, movie._replace(played=True),
+                                    stamped)
             else:
                 failed += 1
         for movie, rating in result_plan.rate:
-            if _changed(movie, server.rate, movie, rating):
-                plexserver.updated(library.cache, movie._replace(
+            if _changed(movie, server.rate, movie, rating) is not None:
+                mediaserver.updated(library.cache, movie._replace(
                     film=movie.film._replace(rating=rating)))
             else:
                 failed += 1
         for film in wishes.to_plex:
             failed += not _wanted_in_plex(server, film)
-    except plexserver.PlexError as error:
+    except mediaserver.MediaServerError as error:
         runlog.error(str(error))
         return 1
     _write_cache(cache_path, library.cache)
@@ -597,16 +630,17 @@ def main(argv: list, program: str = "plex-letterboxd-sync",
     return 1 if failed else 0
 
 
-def _changed(movie, call, *args) -> bool:
-    """One change on the server, and whether it was made. A failure is said
-    and not fatal: a film removed since the library was last read whole cannot
-    be marked, and the rest still can."""
+def _changed(movie, call, *args):
+    """One change on the server: what the call answered ("" for nothing), or
+    None where it was not made. A failure is said and not fatal: a film
+    removed since the library was last read whole cannot be marked, and the
+    rest still can."""
     try:
-        call(*args)
-    except plexserver.PlexError as error:
+        answer = call(*args)
+    except mediaserver.MediaServerError as error:
         runlog.error("%s: %s" % (movie.film, error))
-        return False
-    return True
+        return None
+    return answer or ""
 
 
 def _read_cache(path: str) -> dict | None:

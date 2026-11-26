@@ -39,6 +39,8 @@ __all__ = [
     "SYNC_SETTLE_SECONDS",
     "COMMENTARY_NO_NAME",
     "commentary_prefix",
+    "commentary_prefixes",
+    "split_prefixes",
     "commentary_stem",
     "detect_commentary_language",
     "commentary_language",
@@ -209,8 +211,21 @@ def commentary_prefix(movie_stem: str, track_id) -> str:
     Everything after it is the track's own name, which is the one part a name too
     long for the filesystem is cut into - so this is what says "an output of this
     track", whatever length the rest of it ended up being.
+
+    The number is held off the film by a dot
+    (:data:`plexnames.COMMENTARY_SEPARATOR`), so a server that reads a
+    sidecar's title out of its name shows the commentary's.
     """
-    return "%s %s " % (movie_stem, track_id)
+    return "%s%s%s " % (movie_stem, plexnames.COMMENTARY_SEPARATOR, track_id)
+
+
+def commentary_prefixes(movie_stem: str, track_id) -> tuple:
+    """Every prefix an output of this track may already be on disk under: the
+    one :func:`commentary_prefix` writes first, then the space an older run
+    held the number off with. What looks for a track's outputs asks all of
+    them, so a transcript written before is found rather than made again."""
+    return tuple("%s%s%s " % (movie_stem, separator, track_id)
+                 for separator in plexnames.COMMENTARY_SEPARATORS)
 
 
 def commentary_stem(movie_stem: str, track_id, name: str) -> str:
@@ -238,7 +253,28 @@ def _display_name(raw: str) -> str:
     return raw if raw and raw != "null" else COMMENTARY_NO_NAME
 
 
-def _existing_outputs(prefix: str) -> list:
+def _both_spellings(prefix: str) -> tuple:
+    """One prefix :func:`commentary_prefix` wrote - or an older run did - as
+    every prefix that track's outputs may stand under."""
+    head = prefix[:-1] if prefix.endswith(" ") else prefix
+    for separator in plexnames.COMMENTARY_SEPARATORS:
+        stem, found, track = head.rpartition(separator)
+        if found and track.isdigit():
+            return commentary_prefixes(stem, track)
+    return (prefix,)
+
+
+def split_prefixes(prefixes) -> tuple:
+    """:func:`commentary_prefixes` - or one prefix, widened to the spellings
+    its track's outputs may stand under - as (the directory they are in, the
+    start of a name each says), for a listing to be asked of."""
+    if isinstance(prefixes, str):
+        prefixes = _both_spellings(prefixes)
+    directory = os.path.dirname(prefixes[0]) or "."
+    return directory, tuple(os.path.basename(prefix) for prefix in prefixes)
+
+
+def _existing_outputs(prefix) -> list:
     """The outputs of this track already on disk.
 
     Asked of the track and not of today's exact stem: the stem is cut at a
@@ -246,8 +282,7 @@ def _existing_outputs(prefix: str) -> list:
     renamed, an id tag added - and a check for the exact name would miss the
     transcript sitting right there and transcribe it a second time.
     """
-    directory, start = os.path.split(prefix)
-    directory = directory or "."
+    directory, start = split_prefixes(prefix)
     try:
         names = os.listdir(directory)
     except OSError:
@@ -256,7 +291,7 @@ def _existing_outputs(prefix: str) -> list:
             if name.startswith(start) and name.endswith((".opus", ".srt"))]
 
 
-def _has_existing_output(prefix: str) -> bool:
+def _has_existing_output(prefix) -> bool:
     """The resume check: whether this TRACK already has an output of any kind."""
     return bool(_existing_outputs(prefix))
 
@@ -274,7 +309,7 @@ def _size_of(path: str) -> int:
         return 0
 
 
-def _remove_sidecars(prefix: str) -> None:
+def _remove_sidecars(prefix) -> None:
     """The track's transcripts, gone: the too-small sidecars a -a run discards
     before re-transcribing. Only the .srt is removed - the .opus this phase never
     writes to disk would belong to a run that did the opus pass, and is left
@@ -344,7 +379,11 @@ def _renumber_stale_transcripts(file_stem: str, track_id, name: str,
 
     found = []
     for entry in entries:
-        if not (entry.startswith(stem_base + " ")
+        # Held off the film by either separator: the dot written now, or the
+        # space an older run wrote - which the rename below brings up to date.
+        if not (entry.startswith(tuple(
+                stem_base + separator
+                for separator in plexnames.COMMENTARY_SEPARATORS))
                 and entry.endswith(".srt")):
             continue
         tail = _STALE_TAIL.match(entry[len(stem_base) + 1:])
@@ -365,7 +404,8 @@ def _renumber_stale_transcripts(file_stem: str, track_id, name: str,
     found.sort(key=lambda pair: len(pair[1]), reverse=True)
     kept = 0
     for entry, rest in found:
-        target = "{} {} {}".format(stem_base, track_id, rest)
+        target = "{}{}{} {}".format(stem_base, plexnames.COMMENTARY_SEPARATOR,
+                                    track_id, rest)
         if os.path.exists(os.path.join(directory, target)):
             log("  track {}: WARNING: dropping a second transcript of the "
                 "same commentary: {}".format(track_id, entry))

@@ -126,7 +126,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     The on-disk name is kept verbatim; only the tags are added. A folder that
     already carries an "{imdb-...}" or "{tmdb-...}" tag is not looked up again,
     but its files ARE brought into line with it, without a second ask of the
-    network. The "<film> (old).mkv" an improved remux keeps is never renamed: it
+    network. The "<film> - old.mkv" an improved remux keeps is never renamed: it
     is the film as it arrived, and tagging it would offer Plex a second edition
     of every film that has one.
 

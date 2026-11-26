@@ -28,39 +28,36 @@ import os
 import re
 from collections import Counter
 
-from medialib.lib import clioptions, languages, titlematch
+from medialib.lib import languages, mediaserver, titlematch
 from medialib.lib.enums import PART_WORDS, SOURCE_PART_WORDS, shell_lower
 
-# The two servers the names are written for, and the id tag each of them
-# writes. The mediaServerNaming setting names one; jellyfin.org documents the
-# other spellings its scanner accepts - the provider keys without the "id",
-# and the parentheses and curly braces - and this library reads all of them
-# back, whatever it writes.
+# The servers the names are written for, and how each of them wants a film
+# named, are :data:`mediaserver.PROVIDERS`. The mediaServerNaming setting - or
+# else mediaServer - names one; jellyfin.org documents the other spellings
+# its scanner accepts - the provider keys without the "id", and the
+# parentheses and curly braces - and this library reads all of them back,
+# whatever it writes.
 # https://jellyfin.org/docs/general/server/metadata/identifiers/
-NAMING = {
-    "plex": {
-        "imdb": "{imdb-%s}",
-        "tmdb": "{tmdb-%s}",
-    },
-    "jellyfin": {
-        "imdb": "[imdbid-%s]",
-        "tmdb": "[tmdbid-%s]",
-    },
-}
 
 
 def naming_style() -> str:
-    """The server the names are written for: the mediaServerNaming setting.
+    """The server the names are written for: the mediaServerNaming setting,
+    or mediaServer where it is not set.
 
-    A value the table does not know is refused with the page, like a bad
+    A value the registry does not know is refused with the page, like a bad
     option - read once at the start of the run, before any film is touched.
     """
-    style = shell_lower(os.environ.get("mediaServerNaming", "plex").strip())
-    if style not in NAMING:
-        raise clioptions.UsageError(
-            'The mediaServerNaming setting names "%s". The names are written '
-            "for plex or jellyfin." % style)
-    return style
+    return mediaserver.naming().name
+
+
+def _naming() -> "mediaserver.Naming":
+    return mediaserver.naming().naming
+
+
+def _labels_editions() -> bool:
+    """Whether the server writes an edition as a version label after the
+    name, rather than as a tag."""
+    return _naming().edition == "label"
 
 
 # A film's id tag, anywhere in the name, written either way. The server reads
@@ -95,7 +92,7 @@ def _id_parts(tag: str) -> tuple:
 def id_tag(provider: str, number: str) -> str:
     """The id tag ``provider``'s ``number`` is written under, in the style
     the mediaServerNaming setting writes for."""
-    return NAMING[naming_style()][provider] % number
+    return getattr(_naming(), provider) % number
 
 
 def id_of(name: str) -> tuple:
@@ -173,7 +170,24 @@ _YEAR_LEADING = re.compile(r"^\(?[12][0-9]{3}\)?")
 # What an improved remux leaves the original under, lower-cased for the compare.
 # A copy is never renamed: it is the film as it arrived, and a tag on it would
 # offer Plex a second edition of every film that has one.
-OLD_SUFFIX = " (old).mkv"
+#
+# Written as a version label - " - old" - because that is the one spelling
+# both servers take for another version of the same film: Jellyfin refuses to
+# group a folder's versions at all while one file in it ends in anything else,
+# such as the " (old)" this was written as before. Both are read back, so a
+# copy kept by an older run is still found.
+OLD_SUFFIX = " - old.mkv"
+LEGACY_OLD_SUFFIX = " (old).mkv"
+OLD_SUFFIXES = (OLD_SUFFIX, LEGACY_OLD_SUFFIX)
+
+
+def kept_copy_stem(name: str) -> str:
+    """The film a kept original was copied from, by name: ``name`` with the
+    kept copy's suffix taken off - "" where it carries none."""
+    for suffix in OLD_SUFFIXES:
+        if name.lower().endswith(suffix):
+            return name[:-len(suffix)]
+    return ""
 
 # The edition a remux converted by ingest-movies -r is written under, beside the
 # film it was converted from: the server offers the two as one film with a
@@ -222,8 +236,29 @@ COMMENTARY_EXTENSIONS = ("opus", "srt")
 # What a commentary's output puts after the film it belongs to: the track's
 # number, then the track's own name. The number is what says which of a film's
 # commentaries the file is of, and is the one part of the tail that may not be
-# cut into.
-_COMMENTARY_TAIL = re.compile(r"^ ([0-9]+) (\S.*)$", re.S)
+# cut into. It is held off the film by a dot: Jellyfin reads what stands
+# between the film's name and the language as the subtitle's title, and offers
+# an .opus named that way as another audio track, so the number and the name
+# are what its player shows; Plex reads no title there either way. A space is
+# how it was written before, and is read back and renamed.
+_COMMENTARY_TAIL = re.compile(r"^[ .]([0-9]+) (\S.*)$", re.S)
+
+# What holds the number off the film, and what did before.
+COMMENTARY_SEPARATOR = "."
+LEGACY_COMMENTARY_SEPARATOR = " "
+COMMENTARY_SEPARATORS = (COMMENTARY_SEPARATOR, LEGACY_COMMENTARY_SEPARATOR)
+
+
+def _commentary_tail(tail: str) -> str:
+    """A commentary output's tail, held off the film by
+    :data:`COMMENTARY_SEPARATOR` - any other tail as it is. A transcript an
+    older run wrote with a space is so renamed in place, and never transcribed
+    again."""
+    named, suffix = _split_suffix(tail)
+    if not _COMMENTARY_TAIL.match(named) \
+            or suffix.rsplit(".", 1)[-1].lower() not in COMMENTARY_EXTENSIONS:
+        return tail
+    return COMMENTARY_SEPARATOR + tail[1:]
 
 # The language the transcription writes between a commentary's name and its
 # extension: two or three letters, and nothing a track name would end on.
@@ -343,7 +378,7 @@ def is_kept_copy(path: str) -> bool:
     The suffix comes last, after every tag, so a copy made from an
     already-tagged film answers yes as readily as one made before the tagging.
     """
-    return (os.path.basename(path).lower().endswith(OLD_SUFFIX)
+    return (os.path.basename(path).lower().endswith(OLD_SUFFIXES)
             or is_converted_copy(path))
 
 
@@ -376,12 +411,12 @@ def converted_stem(stem: str) -> str:
     if part:
         words = stem.split()
         head = " ".join(words[:len(words) - eaten])
-        if naming_style() == "jellyfin":
+        if _labels_editions():
             return "%s - %s %s" % (head, CONVERTED_EDITION,
                                    " ".join(words[len(words) - eaten:]))
         return "%s {edition-%s} %s" % (head, CONVERTED_EDITION,
                                        " ".join(words[len(words) - eaten:]))
-    if naming_style() == "jellyfin":
+    if _labels_editions():
         return "%s - %s" % (stem, CONVERTED_EDITION)
     return "%s {edition-%s}" % (stem, CONVERTED_EDITION)
 
@@ -519,7 +554,7 @@ def plex_stem(base: str, tag: str, edition: str, part: str) -> str:
     server's own tag, or its version label after the name."""
     stem = base + " " + tag if tag else base
     if edition:
-        if naming_style() == "jellyfin":
+        if _labels_editions():
             stem += " - " + edition
         else:
             stem += " {edition-" + edition + "}"
@@ -1169,8 +1204,8 @@ def folder_renames(base: str, tag: str, names, aliases=(),
             continue
         own, part = read_stem(base, stem)
         wanted = plex_stem(base, tag, own or edition, part)
-        target = _fits_or_crops(name, wanted, _untagged_tail(
-            spelled[len(stem):]), cropped, over_limit)
+        target = _fits_or_crops(name, wanted, _commentary_tail(_untagged_tail(
+            spelled[len(stem):])), cropped, over_limit)
         if target and target != name:
             plan.append((name, target))
     return plan
@@ -1248,7 +1283,7 @@ def id_tag_renames(tag: str, names, cropped: list | None = None,
         wanted = retag(stem, tag)
         if wanted == stem:
             continue
-        target = _fits_or_crops(name, wanted, name[len(stem):],
+        target = _fits_or_crops(name, wanted, _commentary_tail(name[len(stem):]),
                                 cropped, over_limit)
         if target and target != name:
             plan.append((name, target))

@@ -147,7 +147,7 @@ class TestTheFilesOfOneFolder:
                                              self._one_folder()))
         assert plan["The Movie (1999) (Original Mono Track) 2 Commentary.srt"] \
             == ("The Movie (1999) " + TAG
-                + " {edition-Original Mono Track} 2 Commentary.srt")
+                + " {edition-Original Mono Track}.2 Commentary.srt")
 
     def test_the_copy_an_improvement_kept_is_not_renamed(self):
         plan = dict(plexnames.folder_renames("The Movie (1999)", TAG,
@@ -248,6 +248,34 @@ class TestTheKeptCopy:
         "Something (old).mp4"])
     def test_and_nothing_else_is_one(self, name):
         assert plexnames.is_kept_copy(name) is False
+
+    @pytest.mark.parametrize("name", [
+        "The Movie (1999) - old.mkv",
+        "The Movie (1999) " + TAG + " - old.mkv",
+        "The Movie (1999) " + TAG + " {edition-Colorized} - old.mkv",
+        "The Movie (1999) [imdbid-tt0000001] - Colorized - old.mkv"])
+    def test_a_copy_kept_as_a_version_label_is_one_too(self, name):
+        """Written " - old" now, the spelling Jellyfin groups with the film's
+        other versions; " (old)" stops it grouping any of them."""
+        assert plexnames.is_kept_copy(name) is True
+
+    def test_a_new_copy_is_written_as_a_version_label(self):
+        assert plexnames.OLD_SUFFIX == " - old.mkv"
+        assert plexnames.LEGACY_OLD_SUFFIX in plexnames.OLD_SUFFIXES
+
+    @pytest.mark.parametrize("name,stem", [
+        ("The Movie (1999) - old.mkv", "The Movie (1999)"),
+        ("The Movie (1999) (old).mkv", "The Movie (1999)"),
+        ("The Movie (1999).mkv", "")])
+    def test_the_film_a_copy_was_kept_of(self, name, stem):
+        assert plexnames.kept_copy_stem(name) == stem
+
+    def test_a_kept_copy_is_never_renamed_for_jellyfin(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        tag = "[imdbid-tt0000001]"
+        named = "The Movie (1999) " + tag
+        assert plexnames.folder_renames("The Movie (1999)", tag, [
+            named + ".mkv", named + " - old.mkv"]) == []
 
 
 class TestReadingAFolderName:
@@ -415,7 +443,7 @@ class TestTheIdIsWrittenOnce:
     def test_and_what_the_leftover_goes_on_to_say_is_kept(self):
         base, tag = "The Movie (1999)", "{imdb-tt0000001}"
         names = ["The Movie (1999) " + tag + " {edition-Av1}.mkv",
-                 "The Movie (1999) " + tag + " 2 Commentary.srt"]
+                 "The Movie (1999) " + tag + ".2 Commentary.srt"]
         assert plexnames.folder_renames(base, tag, names) == []
 
 
@@ -543,19 +571,20 @@ class TestACommentaryFollowsItsFilm:
 
     FOLDER = "Film Of The Night (1983)"
     TALK = " 2 Commentary By Two People.en.srt"
+    DOTTED = ".2 Commentary By Two People.en.srt"
 
     def test_a_lower_case_film_keeps_one_year_on_its_transcript(self):
         film = "film of the night (1983)"
         assert plexnames.folder_renames(
             self.FOLDER, TAG, [film + ".mkv", film + self.TALK]) == [
-            (film + self.TALK, self.FOLDER + " " + TAG + self.TALK),
+            (film + self.TALK, self.FOLDER + " " + TAG + self.DOTTED),
             (film + ".mkv", self.FOLDER + " " + TAG + ".mkv")]
 
     def test_a_film_without_the_year_takes_its_transcript_along(self):
         film = "Film Of The Night"
         assert plexnames.folder_renames(
             self.FOLDER, TAG, [film + ".mkv", film + self.TALK]) == [
-            (film + self.TALK, self.FOLDER + " " + TAG + self.TALK),
+            (film + self.TALK, self.FOLDER + " " + TAG + self.DOTTED),
             (film + ".mkv", self.FOLDER + " " + TAG + ".mkv")]
 
     def test_the_folders_year_is_never_left_over(self):
@@ -565,7 +594,7 @@ class TestACommentaryFollowsItsFilm:
     def test_a_second_run_has_nothing_to_do(self):
         named = self.FOLDER + " " + TAG
         assert plexnames.folder_renames(
-            self.FOLDER, TAG, [named + ".mkv", named + self.TALK]) == []
+            self.FOLDER, TAG, [named + ".mkv", named + self.DOTTED]) == []
 
 
 class TestTaggingAFolderNothingCanRename:
@@ -903,7 +932,7 @@ class TestTheFileNameLimit:
         assert over_limit == []
         assert cropped == [(name, target)]
         assert plexnames.fits_name(target)
-        assert target.startswith("%s %s 2 Commentary by" % (self.FOLDER, TAG))
+        assert target.startswith("%s %s.2 Commentary by" % (self.FOLDER, TAG))
         assert target.endswith(".en.srt")
 
     def test_and_it_is_cut_where_the_transcription_cuts_its_own_stem(self):
@@ -913,7 +942,7 @@ class TestTheFileNameLimit:
         plan = plexnames.folder_renames(
             self.FOLDER, TAG, [self.FOLDER + ".mkv", name])
         spoken = name[len("%s 2 " % self.FOLDER):-len(".en.srt")]
-        stem = "%s %s 2 %s" % (self.FOLDER, TAG, spoken)
+        stem = "%s %s.2 %s" % (self.FOLDER, TAG, spoken)
         assert dict(plan)[name] == \
             stem[:plexnames.COMMENTARY_STEM_MAX_BYTES] + ".en.srt"
 
@@ -1116,10 +1145,27 @@ class TestTheNamingSetting:
         assert "plex" in error.value.message
         assert "jellyfin" in error.value.message
 
-    def test_an_empty_setting_is_refused_too(self, monkeypatch):
+    def test_an_empty_setting_follows_the_media_server(self, monkeypatch):
         monkeypatch.setenv("mediaServerNaming", "")
-        with pytest.raises(clioptions.UsageError):
+        monkeypatch.setenv("mediaServer", "jellyfin")
+        assert plexnames.naming_style() == "jellyfin"
+
+    def test_unset_it_follows_the_media_server(self, monkeypatch):
+        monkeypatch.delenv("mediaServerNaming", raising=False)
+        monkeypatch.setenv("mediaServer", "jellyfin")
+        assert plexnames.naming_style() == "jellyfin"
+
+    def test_set_it_wins_over_the_media_server(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "plex")
+        monkeypatch.setenv("mediaServer", "jellyfin")
+        assert plexnames.naming_style() == "plex"
+
+    def test_a_media_server_the_registry_does_not_know_is_refused(self, monkeypatch):
+        monkeypatch.delenv("mediaServerNaming", raising=False)
+        monkeypatch.setenv("mediaServer", "kodi")
+        with pytest.raises(clioptions.UsageError) as error:
             plexnames.naming_style()
+        assert "mediaServer setting" in error.value.message
 
 
 class TestWritingForJellyfin:
@@ -1273,3 +1319,63 @@ class TestSwitchingTheServer:
             ["Film (2020) {imdb-tt0120737} {edition-Colorized}.mkv"])
         assert plan == [("Film (2020) {imdb-tt0120737} {edition-Colorized}.mkv",
                          "Film (2020) [imdbid-tt0120737] - Colorized.mkv")]
+
+
+class TestACommentaryTitledByItsName:
+    """Jellyfin reads a sidecar's title out of its name - the part between the
+    film and the language - and Plex reads none, so the track's number is held
+    off the film by a dot whichever server the names are for, and the
+    commentary's name is the title Jellyfin's player shows. A transcript an
+    older run held off with a space is renamed in place."""
+
+    FOLDER = "Film Of The Night (1983)"
+    JTAG = "[imdbid-tt0000001]"
+    PLEX_TALK = " 2 Commentary By Two People.en.srt"
+    JELLY_TALK = ".2 Commentary By Two People.en.srt"
+
+    def test_the_number_is_held_off_by_a_dot(self):
+        assert plexnames.COMMENTARY_SEPARATOR == "."
+
+    def test_a_spaced_transcript_is_renamed_for_jellyfin(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        named = self.FOLDER + " " + self.JTAG
+        assert plexnames.folder_renames(
+            self.FOLDER, self.JTAG,
+            [named + ".mkv", named + self.PLEX_TALK,
+             named + " 2 Commentary By Two People.opus"]) == [
+            (named + self.PLEX_TALK, named + self.JELLY_TALK),
+            (named + " 2 Commentary By Two People.opus",
+             named + ".2 Commentary By Two People.opus")]
+
+    def test_and_for_plex_too(self):
+        named = self.FOLDER + " " + TAG
+        assert plexnames.folder_renames(
+            self.FOLDER, TAG, [named + ".mkv", named + self.PLEX_TALK]) == [
+            (named + self.PLEX_TALK, named + self.JELLY_TALK)]
+
+    def test_with_an_edition_the_dot_follows_the_whole_film_name(self, monkeypatch):
+        """The transcript belongs to the version whose whole name it starts
+        with - edition and all - and Jellyfin attaches it to that one only."""
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        film = self.FOLDER + " " + self.JTAG + " - Director's Cut"
+        assert plexnames.folder_renames(
+            self.FOLDER, self.JTAG, [film + ".mkv", film + self.JELLY_TALK]) == []
+
+    def test_a_second_run_has_nothing_to_do(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        named = self.FOLDER + " " + self.JTAG
+        assert plexnames.folder_renames(
+            self.FOLDER, self.JTAG, [named + ".mkv", named + self.JELLY_TALK]) == []
+
+    def test_a_plain_sidecar_is_no_commentary_output(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        named = self.FOLDER + " " + self.JTAG
+        assert plexnames.folder_renames(
+            self.FOLDER, self.JTAG, [named + ".mkv", named + ".en.forced.srt"]) == []
+
+    def test_a_dotted_transcript_is_cut_only_into_its_name(self):
+        wanted = self.FOLDER + " " + self.JTAG
+        tail = ".2 " + "Commentary " * 40 + ".en.srt"
+        cut = plexnames.crop_commentary(wanted, tail)
+        assert cut.startswith(wanted + ".2 Commentary") and cut.endswith(".en.srt")
+        assert plexnames.fits_name(cut)

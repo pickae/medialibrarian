@@ -6,7 +6,7 @@ import csv
 import pytest
 
 from medialib.cli import plex_letterboxd_sync as sync
-from medialib.lib import letterboxd
+from medialib.lib import jellyfinserver, letterboxd
 from medialib.lib.filmmatch import Film
 from medialib.lib.letterboxd import Row
 from medialib.lib.plexserver import Library, Movie, Wanted
@@ -146,7 +146,9 @@ def test_a_row_the_feed_does_not_show_keeps_waiting():
 class _Server:
     def __init__(self, *movies):
         self._movies = list(movies)
-        self.marked, self.rated = [], []
+        self.marked, self.rated, self.days = [], [], []
+        # What marking a film leaves on the server as a day it was played.
+        self.stamps = ""
 
     def asked_for(self, account):
         self.account = account
@@ -156,8 +158,10 @@ class _Server:
         self.asked_whole = whole
         return Library(list(self._movies), {"movies": []}, cache is None or whole)
 
-    def mark_played(self, movie):
+    def mark_played(self, movie, day=""):
         self.marked.append(movie.key)
+        self.days.append(day)
+        return self.stamps
 
     def rate(self, movie, rating):
         self.rated.append((movie.key, rating))
@@ -179,7 +183,10 @@ def run(monkeypatch, tmp_path):
                      _movie("2", "Hollow Night", "2018", played=True,
                             dates=["2023-01-01"]))
     monkeypatch.setattr(sync.plexserver, "from_environment",
+                        lambda account: server.asked_for(account or sync.plexserver.OWNER))
+    monkeypatch.setattr(jellyfinserver, "from_environment",
                         lambda account: server.asked_for(account))
+    monkeypatch.delenv("mediaServer", raising=False)
     monkeypatch.setattr(sync.tooldeps, "require_tools", lambda *a, **k: 0)
     monkeypatch.delenv("tmdbApiKey", raising=False)
     state, out = tmp_path / "state.json", tmp_path / "import.csv"
@@ -300,3 +307,62 @@ def test_the_owner_s_plays_unless_another_account_is_named(run, tmp_path):
     assert server.account == "1"
     run("-p", "-a", "3", export)
     assert server.account == "3"
+
+
+# --- on Jellyfin --------------------------------------------------------------
+
+def test_on_jellyfin_a_film_is_marked_played_on_the_day_letterboxd_has(
+        run, tmp_path, monkeypatch):
+    monkeypatch.setenv("mediaServer", "jellyfin")
+    _code, server, _state, _out = run(_export(tmp_path / "export.zip"))
+    assert server.marked == ["1"] and server.days == ["2020-07-08"]
+
+
+def test_on_plex_no_day_is_passed_on(run, tmp_path):
+    _code, server, _state, _out = run(_export(tmp_path / "export.zip"))
+    assert server.days == [""]
+
+
+def test_on_jellyfin_the_library_is_kept_under_its_own_name(run, tmp_path, monkeypatch):
+    monkeypatch.setenv("mediaServer", "jellyfin")
+    run(_export(tmp_path / "export.zip"))
+    assert (tmp_path / "state-jellyfin.json").is_file()
+    assert not (tmp_path / "state-plex.json").exists()
+
+
+def test_on_jellyfin_the_watchlist_is_left_out(run, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("mediaServer", "jellyfin")
+
+    def asked(*_args):
+        raise AssertionError("Jellyfin keeps no watchlist")
+    monkeypatch.setattr(sync, "plan_watchlist", asked)
+    code, *_rest = run(_export(tmp_path / "export.zip"))
+    assert code == 0
+
+
+def test_on_jellyfin_a_user_s_name_is_taken_by_a(run, tmp_path, monkeypatch):
+    monkeypatch.setenv("mediaServer", "jellyfin")
+    _code, server, _state, _out = run("-p", "-a", "someone", _export(tmp_path / "export.zip"))
+    assert server.account == "someone"
+
+
+def test_on_plex_a_name_is_no_account_number(run, tmp_path):
+    code, server, _state, _out = run("-p", "-a", "someone", _export(tmp_path / "export.zip"))
+    assert code == 1 and not hasattr(server, "account")
+
+
+def test_a_server_medialib_does_not_know_is_refused(run, tmp_path, monkeypatch):
+    monkeypatch.setenv("mediaServer", "kodi")
+    code, server, _state, _out = run(_export(tmp_path / "export.zip"))
+    assert code == 1 and server.marked == []
+
+
+def test_the_day_a_mark_stamped_is_kept_with_the_library(run, tmp_path, monkeypatch):
+    monkeypatch.setenv("mediaServer", "jellyfin")
+    server = run("-p", _export(tmp_path / "export.zip"))[1]
+    server.stamps = "2020-07-08"
+    marked = []
+    monkeypatch.setattr(sync.mediaserver, "updated",
+                        lambda cache, movie, stamped="": marked.append(stamped))
+    run(_export(tmp_path / "export.zip"))
+    assert "2020-07-08" in marked

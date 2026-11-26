@@ -46,7 +46,7 @@ def library(monkeypatch, tmp_path):
                 raise plexserver.PlexError(held["fail"])
             return held["copies"]
 
-    monkeypatch.setattr(phase.plexserver, "local", Server)
+    monkeypatch.setattr(plexserver, "local", Server)
     monkeypatch.setattr(phase.plexcompare, "read_profile",
                         lambda path, edition="": held["profiles"].get(str(path)))
     monkeypatch.setattr(phase.plexcompare, "measure_offset", lambda *a: plexcompare.Offset(
@@ -161,7 +161,7 @@ class TestTheVerdicts:
         status, said = _compare(tmp_path, tmp_path)
         assert status == 1
         assert said[-1] == ("Plex: SKIPPED, the server could not be asked "
-                            "(connection refused)")
+                            "(connection refused) - set plexUrl and plexToken")
 
 
 class TestTheMode:
