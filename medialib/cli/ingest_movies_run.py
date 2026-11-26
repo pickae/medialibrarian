@@ -284,7 +284,8 @@ class Run:
             return
 
         heading()
-        self.remux(movie, base, tracks, transcripts, job, subtitles, carried)
+        self.remux(movie, base, tracks, transcripts, job, subtitles, carried,
+                   choice.original)
 
     def read_image_subtitles(self, movie: str, base: str, tracks: list,
                              say) -> None:
@@ -386,6 +387,16 @@ class Run:
         and before the tagging has put one there by what the tagging would
         put (:class:`lanes.FilmTags`).
         """
+        return self._film_languages(movie, wait=True)
+
+    def known_original_language(self, movie: str) -> str:
+        """The film's original language as far as it is known without
+        waiting for the tagging's dry run - "" when only that could say it.
+        For the tag refresh, which runs while that asking still goes on."""
+        return self._film_languages(movie, wait=False).original
+
+    def _film_languages(self, movie: str,
+                        wait: bool) -> tmdbidentify.FilmLanguages:
         if not os.environ.get("tmdbApiKey"):
             return tmdbidentify.FilmLanguages()
         stem = os.path.splitext(os.path.basename(movie))[0]
@@ -396,7 +407,8 @@ class Run:
         film_tags = getattr(self, "film_tags", None)
         try:
             if not tag and film_tags is not None:
-                tag = film_tags.tag_of(movie)
+                tag = (film_tags.tag_of(movie) if wait
+                       else film_tags.known_tag_of(movie))
             return (tmdbidentify.film_languages(tag) if tag
                     else tmdbidentify.FilmLanguages())
         except Exception as error:  # noqa: BLE001 - the first track's language stands
@@ -479,9 +491,10 @@ class Run:
 
     def remux(self, movie: str, base: str, tracks: list, transcripts: list,
               job: dict, subtitles: tuple | list = (),
-              carried: tuple | list = ()) -> None:
+              carried: tuple | list = (), original: str = "") -> None:
         """The improved copy itself: ONE mkvmerge call, however many of the
-        improvements apply."""
+        improvements apply. ``original`` is the film's original language
+        when the file has a soundtrack in it, "" otherwise."""
         scratch, on_disk = self._scratch_for(movie, job)
         if scratch is None:
             log("  WARNING: no scratch directory could be created, left "
@@ -502,7 +515,8 @@ class Run:
                         + movie)
                     return
             argv, order, slots = self._mkvmerge_command(
-                movie, tracks, transcripts, job, hevc, subtitles, carried)
+                movie, tracks, transcripts, job, hevc, subtitles, carried,
+                original)
             if self._run_and_swap(movie, scratch, argv, order, job, hevc):
                 self._after_carrying(movie, base, carried, order, slots)
         finally:
@@ -576,7 +590,8 @@ class Run:
     def _mkvmerge_command(self, movie: str, tracks: list, transcripts: list,
                           job: dict, hevc: str,
                           subtitles: tuple | list = (),
-                          carried: tuple | list = ()) -> tuple:
+                          carried: tuple | list = (),
+                          original: str = "") -> tuple:
         """File 0 is the original with unwanted tracks deselected; each
         swapped converted lossless track, each downloaded subtitle and each
         commentary srt is an extra input
@@ -595,9 +610,22 @@ class Run:
         those: its audio below the film's own (a commentary below its
         commentaries), its transcripts after the film's. Each slot of those
         is returned with the input it is, for what is done after the swap.
+
+        With ``original`` known, every audio and subtitle track has its
+        original flag set or cleared by :func:`rules.is_original_version`, as
+        the tag refresh sets it; without it the film's own tracks keep the
+        flag they have.
         """
         extra, next_fid = [], 1
         video_fid = ""
+
+        def original_flag(selector: str, track,
+                          role: str = "") -> list:
+            if not original:
+                return []
+            return ["--original-flag", "%s:%d" % (
+                selector, rules.is_original_version(track, original,
+                                                    role=role))]
 
         if job["wanted"] and hevc:
             video = tracks[job["video_index"]]
@@ -635,6 +663,7 @@ class Run:
                 extra += ["--forced-display-flag", "0:1"]
             if track.is_commentary:
                 extra += ["--commentary-flag", "0:1"]
+            extra += original_flag("0", track)
             extra += ["--no-chapters", track.lossless]
 
         sub_fids = []
@@ -649,6 +678,8 @@ class Run:
             elif role == "sdh":
                 extra += ["--track-name", "0:SDH",
                           "--hearing-impaired-flag", "0:1"]
+            extra += original_flag(
+                "0", rules.Track(type="subtitles", language=language), role)
             extra += ["--no-chapters", srt]
 
         carried_audio, carried_text = [], []
@@ -665,7 +696,11 @@ class Run:
                     title = "%s (%s)" % (title, item.language.upper())
                 extra += ["--language", "0:" + item.language, "--track-name",
                           "0:" + title, "--commentary-flag", "0:1",
-                          "--default-track-flag", "0:0", item.path]
+                          "--default-track-flag", "0:0"]
+                extra += original_flag("0", rules.Track(
+                    type="subtitles", language=item.language,
+                    commentary="true"))
+                extra += [item.path]
                 carried_text.append(("%d:0" % fid, item))
                 continue
             extra += ["--language", "%d:%s" % (within, audio.language or "und"),
@@ -673,6 +708,10 @@ class Run:
                       "--default-track-flag", "%d:0" % within]
             if item.carried.kind == "commentary":
                 extra += ["--commentary-flag", "%d:1" % within]
+            extra += original_flag(str(within), rules.Track(
+                type="audio", language=audio.language, language_ietf=audio.ietf,
+                name=audio.name, commentary="true"
+                if item.carried.kind == "commentary" else "false"))
             if not item.path.lower().endswith((".opus", ".flac")):
                 # Straight out of the library's copy: that one track of it,
                 # and nothing else it holds.
@@ -689,7 +728,10 @@ class Run:
             # readily as the three-letter one.
             extra += ["--language", "0:" + language, "--track-name",
                       "0:" + title, "--commentary-flag", "0:1",
-                      "--default-track-flag", "0:0", srt]
+                      "--default-track-flag", "0:0"]
+            extra += original_flag("0", rules.Track(
+                type="subtitles", language=language, commentary="true"))
+            extra += [srt]
 
         selection = []
         audio = [t for t in tracks if t.is_audio]
@@ -704,6 +746,11 @@ class Run:
             # The video now comes from the prepared stream, so file 0
             # contributes every track except its video one.
             selection += ["-D"]
+        # File 0's own audio and subtitles, as the selection above takes them.
+        for track in tracks:
+            if (track.is_audio and track.action == "keep") or (
+                    track.is_subtitle and track.action != "drop"):
+                selection += original_flag(track.id, track)
 
         placed = []
         for position, track in enumerate(tracks):
@@ -3778,7 +3825,11 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             "OMITTED (-o roles)")
     else:
         log("Phase: refreshing mkv tags and track flags")
-    rules.update_tags(root, roles="roles" not in omit)
+    # The original flags from the film's original language where it is known
+    # already - by the id the name carries, as on every run after the first;
+    # the remux sets them where it is not yet.
+    rules.update_tags(root, roles="roles" not in omit,
+                      original_of=state.known_original_language)
     if "junk" not in omit:
         rules.cleanup(root)
 

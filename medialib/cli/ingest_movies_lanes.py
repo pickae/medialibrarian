@@ -399,6 +399,12 @@ class FilmTags:
         """The id tag of the film folder ``movie`` is in, or ""."""
         return self.tags().get(key(os.path.dirname(movie)), "")
 
+    def known_tag_of(self, movie: str) -> str:
+        """:meth:`tag_of` as far as the asking has got: "" while it is still
+        going, rather than waiting for it."""
+        tags = self._tags
+        return tags.get(key(os.path.dirname(movie)), "") if tags else ""
+
     def _ask(self) -> dict:
         tagged: dict = {}
         tmdblookup.tag_plex_ids(self._root, _quiet, safety.SkipLog(),

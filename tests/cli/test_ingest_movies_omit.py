@@ -177,7 +177,7 @@ class TestTheOmittedPhase:
             monkeypatch.setattr(run.rules, name, lambda *a, **k: 0)
         monkeypatch.setattr(
             run.rules, "update_tags",
-            lambda _root, roles=True: seen.append(
+            lambda _root, roles=True, original_of=None: seen.append(
                 "update_tags" if roles else "update_tags without roles"))
         monkeypatch.setattr(run.safety, "lower_case_extensions",
                             note("lower"))

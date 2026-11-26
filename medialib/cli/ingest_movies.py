@@ -477,6 +477,34 @@ def original_on_disc(tracks: list, original: str) -> bool:
         for track in tracks)
 
 
+def is_original_version(track, original: str, language: str = "",
+                        role: str = "") -> bool:
+    """Is the track the film in its original language - the one Matroska's
+    original flag marks?
+
+    A soundtrack spoken in ``original``, or a full subtitle in it: never a
+    commentary, an audio description, a score, or a forced or SDH subtitle,
+    and never a dub, which is in another language by being one. Nothing is
+    when ``original`` is "" - the film's own language unknown.
+
+    ``language`` is the tag the track is about to be given, when that is not
+    the one it carries, and ``role`` a subtitle's measured role, when that is
+    not the one its flags and name say.
+    """
+    if not original:
+        return False
+    if language:
+        if not languages.speaks(language, "", original):
+            return False
+    elif not languages.speaks(track.language, track.language_ietf, original):
+        return False
+    if track.is_audio:
+        return track.audio_role == "main"
+    if track.is_subtitle:
+        return (role or track.subtitle_role) == "full"
+    return False
+
+
 class LanguageChoice(NamedTuple):
     """The film's own language the improved copy keeps beside the kept ones.
 
@@ -1180,14 +1208,16 @@ def _is_matroska(path: str) -> bool | None:
         return None
 
 
-def update_tags(root: str, roles: bool = True) -> None:
+def update_tags(root: str, roles: bool = True, original_of=None) -> None:
     """``updateTags``: the mkv title and every track's flags, refreshed from the
     track layout in ONE mkvpropedit call per file.
 
     Each mkvpropedit call rewrites the file header, so batching turns dozens of
     rewrites into one. With ``roles`` the subtitles are measured as well, and
     the forced and SDH flags of each the file says wrong are put right in the
-    same call (:func:`_measured_role_edits`).
+    same call (:func:`_measured_role_edits`). ``original_of`` answers a film's
+    original language for its path, "" when unknown, and the original flags
+    are put right from it too; without it they are left alone.
     """
     for movie in _files_below(root, matches=lambda name:
                               name.endswith("mkv")):
@@ -1225,7 +1255,8 @@ def update_tags(root: str, roles: bool = True) -> None:
 
         tracks = _identify(movie)
         edits = _measured_role_edits(movie, tracks) if roles else {}
-        arguments = _tag_arguments(tracks, edits)
+        arguments = _tag_arguments(
+            tracks, edits, original_of(movie) if original_of else "")
         if arguments:
             failure = _run_capture(["mkvpropedit", movie] + arguments)
             if failure:
@@ -1287,12 +1318,18 @@ def update_roles(root: str) -> int:
     return changed
 
 
-def _tag_arguments(tracks: list, role_edits=None) -> list:
+def _tag_arguments(tracks: list, role_edits=None, original: str = "") -> list:
     """One ``--edit`` scope per track, bundling every ``--set`` for it together.
 
     ``role_edits`` is :func:`subtitle_role_edits`' answer: a subtitle in it is
     given the flags of the role it was measured to have, and one measured not
     to be forced is not flagged forced again for its name.
+
+    ``original`` is the film's original language as TMDb says it, "" when
+    unknown. When the file has a soundtrack in it, every audio and subtitle
+    track has its original flag set or cleared by
+    :func:`is_original_version`, as the remux sets it; otherwise the flag is
+    left as the file has it.
 
     Always the same numeric selector: addressing a track as ``track:$i`` here and
     as ``track:v1`` there makes mkvpropedit warn that the two resolve to the same
@@ -1313,6 +1350,8 @@ def _tag_arguments(tracks: list, role_edits=None) -> list:
             default_audio = position
     if default_audio is None:
         default_audio = first_audio
+    if not original_on_disc(tracks, original):
+        original = ""
 
     arguments = []
     for position, track in enumerate(tracks, start=1):
@@ -1351,6 +1390,14 @@ def _tag_arguments(tracks: list, role_edits=None) -> list:
         # Music with no words in it has no language to be in.
         if track.is_audio and track.audio_role in ("score", "effects"):
             sets += ["--set", "language=zxx"]
+
+        # Judged on the language tag just set and the role just measured, so
+        # the flag says what the track is once this call is done.
+        if original and (track.is_audio or track.is_subtitle):
+            sets += ["--set", "flag-original=%d" % is_original_version(
+                track, original,
+                language=spoken.code3 if spoken is not None else "",
+                role=edit[1] if edit else "")]
 
         arguments += ["--edit", "track:%d" % position] + sets
     return arguments
