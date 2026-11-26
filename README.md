@@ -124,6 +124,10 @@ A smaller machine runs them too — just with the CPU roads and less overlap.
   Ghostscript (`gs`), `duckdb`, [subcleaner](https://github.com/KBlixt/subcleaner),
   Subtitle Edit's [`seconv`](https://github.com/SubtitleEdit/subtitleedit/releases),
   `curl` (for TheMovieDB, Plex, Letterboxd and the chapter model) and `wc`.
+- `ingest-music` optionally uses `flac`, for beets' check of the ingested
+  files for damage, and beets' Discogs client (`python3-discogs-client`, or
+  `pipx inject beets python3-discogs-client` for a pipx-installed beets),
+  for Discogs as a second source with the `discogsToken` setting.
 - `convert-audio -o xheaac` additionally needs
   [exhale](https://gitlab.com/ecodis/exhale), which ffmpeg cannot stand in for:
   it decodes the codec but does not encode it. No distribution packages exhale,

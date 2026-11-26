@@ -75,7 +75,13 @@ USER_AGENT = "medialibrarian-update-deps"
 # The pipx venvs the commands run: the package itself, the subtitle aligner and
 # both yt-dlp lines. ruff and mypy are the repository's own lint gate.
 PIPX_VENVS = ("medialibrarian", "ffsubsync", "yt-dlp", "yt-dlp-nightly", "uv",
-              "ruff", "mypy")
+              "ruff", "mypy", "beets")
+
+# Debian packages no install hint names, because no command checks for them:
+# beets' discogs plugin imports the client, which ingest-music uses when the
+# discogsToken setting is set. In a pipx-installed beets it is a package of the
+# beets venv (pipx inject beets python3-discogs-client), updated with it.
+EXTRA_APT_PACKAGES = ("python3-discogs-client",)
 
 # The two helpers started through ``pipx run``: the module that marks their
 # cached environment, and the PyPI name of the package it belongs to.
@@ -335,10 +341,11 @@ def update_or_hold(row: Row, apply: Callable[[], str | None]) -> Row:
 # --- apt ---------------------------------------------------------------------
 
 def apt_packages() -> list[str]:
-    """The Debian packages the commands' install hints name."""
+    """The Debian packages the commands' install hints name, and the few
+    they lean on that no hint names."""
     sys.path.insert(0, str(REPO))
     from medialib.lib import tooldeps
-    names: set[str] = set()
+    names: set[str] = set(EXTRA_APT_PACKAGES)
     for note in tooldeps._TOOL_NOTES.values():
         names.update(re.findall(r"apt install ([\w.+-]+)", note))
     return sorted(names)

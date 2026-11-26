@@ -55,6 +55,8 @@ class TestParsing:
     def test_apt_packages_come_from_the_install_hints(self):
         packages = u.apt_packages()
         assert {"ffmpeg", "mkvtoolnix", "poppler-utils"} <= set(packages)
+        # beets' damage check and its Discogs source.
+        assert {"beets", "flac", "python3-discogs-client"} <= set(packages)
         assert all(" " not in p for p in packages)
 
     def test_crates2_keys(self):

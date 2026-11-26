@@ -1181,12 +1181,15 @@ def _BEET_CALLS(log_file: str) -> str:
     return "printf '%s\\n' \"$*\" >> " + log_file + "\n"
 
 
-def _beet_calls(log_file) -> list[list[str]]:
-    """The beets calls the stand-in recorded, one list of arguments a line."""
+def _beet_calls(log_file, command: str = "import") -> list[list[str]]:
+    """The beets calls the stand-in recorded for ``command``, one list of
+    arguments a line. The import is the one these tests are about; the reports
+    the run reads afterwards are calls of their own."""
     if not log_file.exists():
         return []
-    return [line.split(" ") for line in log_file.read_text().splitlines()
-            if line.strip()]
+    calls = [line.split(" ") for line in log_file.read_text().splitlines()
+             if line.strip()]
+    return [call for call in calls if command in call]
 
 
 class TestTheBeetsConfig:
@@ -1257,6 +1260,71 @@ class TestTheBeetsConfig:
         calls = _beet_calls(log)
         assert len(calls) == 1, calls
         assert calls[0][calls[0].index("-c") + 1] == str(from_the_option), calls
+
+    def _with_layout(self, keep_music, tmp_path, layout):
+        settings_file = tmp_path / "settings"
+        settings_file.write_text("musicLayout=%s\n" % layout)
+        return keep_music.run("ingest-music", "-j", "2",
+                              str(keep_music.download), str(keep_music.library),
+                              str(keep_music.opus),
+                              env=dict(os.environ,
+                                       CLI_SETTINGS_FILE=str(settings_file)),
+                              timeout=900)
+
+    def test_a_layout_runs_its_own_config_and_moves_into_the_library(
+            self, keep_music, tmp_path):
+        """The plex layout runs the file it ships, names the library with -d
+        and moves with -m - and the names beets gives are not cleaned
+        afterwards."""
+        log = keep_music.work / "beet-calls"
+        keep_music.with_tool("beet", _BEET_CALLS(str(log)))
+        done = self._with_layout(keep_music, tmp_path, "plex")
+        output = done.stdout + done.stderr
+        assert done.returncode == 0, output
+        calls = _beet_calls(log)
+        assert len(calls) == 1, calls
+        call = calls[0]
+        assert call[call.index("-c") + 1].endswith(
+            "medialib/config/beets-plex.yaml"), call
+        assert call[call.index("-d") + 1] == os.path.abspath(
+            str(keep_music.library)), call
+        assert "-miq" in call and "-Ciq" not in call, call
+        assert "Cleaning ingested folder and file names" not in output
+        for report in ("missing", "duplicates"):
+            asked = _beet_calls(log, report)
+            assert len(asked) == 1, (report, asked)
+            assert asked[0][asked[0].index("-c") + 1] == call[
+                call.index("-c") + 1]
+
+    def test_a_discogs_token_runs_a_copy_of_the_config_that_asks_discogs(
+            self, keep_music, tmp_path):
+        log = keep_music.work / "beet-calls"
+        keep_music.with_tool(
+            "beet", _BEET_CALLS(str(log))
+            + "case \"$*\" in *import*) cp \"$2\" "
+            + str(keep_music.work / "run-config") + ";; esac\n")
+        settings_file = tmp_path / "settings"
+        settings_file.write_text("discogsToken=sekrit\n")
+        settings_file.chmod(0o600)
+        done = keep_music.run("ingest-music", "-j", "2",
+                              str(keep_music.download), str(keep_music.library),
+                              str(keep_music.opus),
+                              env=dict(os.environ,
+                                       CLI_SETTINGS_FILE=str(settings_file)),
+                              timeout=900)
+        assert done.returncode == 0, done.stdout + done.stderr
+        call = _beet_calls(log)[0]
+        assert call[call.index("-c") + 1].endswith("beets-run.yaml"), call
+        copied = (keep_music.work / "run-config").read_text()
+        assert "discogs:\n    user_token: 'sekrit'" in copied
+        assert "sekrit" not in done.stdout + done.stderr
+
+    def test_a_layout_that_is_not_one_is_refused_before_any_work(
+            self, keep_music, tmp_path):
+        done = self._with_layout(keep_music, tmp_path, "kodi")
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert '"kodi" is not a music layout' in done.stderr
+        assert not keep_music.ffmpeg_calls.exists(), "the run did work"
 
     def test_a_config_that_is_not_there_is_refused_before_any_work(
             self, keep_music):

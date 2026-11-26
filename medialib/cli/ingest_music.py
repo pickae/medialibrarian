@@ -33,9 +33,11 @@ import time
 from medialib import commands
 from medialib.lib import (
     aimusic,
+    beetsextras,
     clioptions,
     console,
     cuechapters,
+    downloadcleanup,
     durationcheck,
     enums,
     ffmpegselect,
@@ -44,6 +46,7 @@ from medialib.lib import (
     imagemagick,
     imagesizes,
     keepparts,
+    musiclayout,
     mutagentags,
     ramscratch,
     runcontext,
@@ -71,10 +74,10 @@ Options:"""
 OPT_SPEC = """
 h |  | Print this help page.
 c | <file> | The beets config the tagging phase runs with. The one that
-                  ships with the package is the default, and its
-                  "directory: ." resolves to <ingestDir> because beets runs
-                  from inside it - a config that names a directory of its own
-                  moves the library there.
+                  ships with the package for the musicLayout setting is the
+                  default, and its "directory: ." resolves to <ingestDir>
+                  because beets runs from inside it - a config that names a
+                  directory of its own moves the library there.
                   Default the shipped medialib/config/beets.yaml
 j | <jobs> | Run up to <jobs> encoder processes in parallel
                   (default: the number of CPU cores).
@@ -103,7 +106,9 @@ USAGE_TAIL = """
 
 Dependencies:
     ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes and beets (unless -o).
-    Optional: flock (numbers the progress lines)."""
+    Optional: flock (numbers the progress lines), flac (beets' check of the
+    ingested files for damage) and python3-discogs-client (Discogs as a
+    second source, with the discogsToken setting)."""
 
 # Cover-image conversion: only images of at least this size are re-encoded to
 # AVIF (smaller ones are copied unchanged), and the AVIF encode settings.
@@ -645,6 +650,7 @@ class Run:
     ingested_pairs: str
     model_meter: str
     beets_summary: aimusic.Summary | None
+    beets_reports: beetsextras.Reports | None
     # The run's clocks, each unset until the phase it times has begun.
     run_start: float
     run_end: float | None
@@ -1351,6 +1357,11 @@ def footer(state) -> None:
         _stat_row_if_any("  still unmatched", beets_summary.still_skipped)
         _stat_row_if_any("  duplicates", beets_summary.duplicate_skips)
         _stat_row_if_any("  imported as-is", beets_summary.asis)
+    beets_reports = getattr(state, "beets_reports", None)
+    if beets_reports:
+        _stat_row_if_any("Albums missing tracks", beets_reports.missing)
+        _stat_row_if_any("Duplicate albums", beets_reports.duplicates)
+        _stat_row_if_any("Damaged files", beets_reports.bad)
     _stat_row("Total time", "%s s (%s)" % (
         "%.2f" % total_seconds, formatting.fmt_hms("%.2f" % total_seconds)))
 
@@ -1417,15 +1428,24 @@ def main(argv: list, program: str = "ingest-music",
                      else ingest_dir + "opus")
 
     offline = "o" in result.given
+    try:
+        layout = musiclayout.chosen(
+            os.environ.get(musiclayout.SETTING_VARIABLE, ""))
+    except ValueError as error:
+        sys.stderr.write("\nThe %s setting: %s.\n\n"
+                         % (musiclayout.SETTING_VARIABLE, error))
+        return 1
     if offline:
         # The tagging phase will not run, so its config is not asked for.
         beets_config = ""
     else:
         # The option wins over the beetsConfig setting, which settings.load()
-        # put in the environment; the shipped file is what neither names.
+        # put in the environment; the file the layout ships is what neither
+        # names.
         beets_config = (result.values["beetsConfig"]
                         or os.environ.get("beetsConfig", "")
-                        or os.path.join(commands.config_dir(), "beets.yaml"))
+                        or musiclayout.config_path(layout,
+                                                   commands.config_dir()))
         if not os.path.isfile(beets_config):
             sys.stderr.write('\nThe beets config "%s" does not exist.\n\n%s\n'
                              % (beets_config, clioptions.page(declaration)))
@@ -1457,7 +1477,7 @@ def main(argv: list, program: str = "ingest-music",
     try:
         return _settle_and_ingest(program, script_dir, download_dir,
                                   ingest_dir, opus_copy_dir, jobs,
-                                  keep_parts, beets_config, offline)
+                                  keep_parts, beets_config, offline, layout)
     finally:
         # The ffmpeg pin can make the run directory before init_ram_base
         # does, and every refusal after it must hand it back.
@@ -1467,7 +1487,7 @@ def main(argv: list, program: str = "ingest-music",
 def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
                        ingest_dir: str, opus_copy_dir: str, jobs: int,
                        keep_parts: frozenset, beets_config: str,
-                       offline: bool) -> int:
+                       offline: bool, layout: musiclayout.Layout) -> int:
     # Which of this machine's ffmpeg builds does the re-encoding - inherited by
     # the convert-audio child, and settled before the preflight below asks
     # whether PATH can reach one.
@@ -1518,14 +1538,15 @@ def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
     try:
         return _ingest(program, script_dir, download_dir, ingest_dir,
                        opus_copy_dir, counter_dir, skips, jobs, keep_parts,
-                       beets_config, offline)
+                       beets_config, offline, layout)
     finally:
         console.hide_active()
 
 
 def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
             opus_copy_dir: str, counter_dir: str, skips, jobs: int,
-            keep_parts: frozenset, beets_config: str, offline: bool) -> int:
+            keep_parts: frozenset, beets_config: str, offline: bool,
+            layout: musiclayout.Layout) -> int:
     # Stamped here rather than at the top of the run proper, because the closing
     # report divides by it and the pretreatment below - de-duplicating, splitting
     # discs, copying - is already part of what the run cost.
@@ -1549,7 +1570,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         ingested_sources=os.path.join(counter_dir, "ingestedSources"),
         ingested_pairs=os.path.join(counter_dir, "ingestedPairs"),
         model_meter=os.path.join(counter_dir, "musicModel.meter"),
-        beets_summary=None,
+        beets_summary=None, beets_reports=None,
         run_start=run_start, run_end=None,
         encode_start=None, encode_end=None)
     safety.set_run_footer(lambda: footer(state))
@@ -1622,24 +1643,43 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     # never renamed. The config is the one the run was given - the shipped
     # medialib/config/beets.yaml by default, which travels with the package
     # instead of a personal ~/.config/beets - and beets runs from inside the
-    # library so its "directory: ." resolves there.
+    # library so its "directory: ." resolves there. A layout that lets beets
+    # name the library moves each matched album, into the folder -d names.
     if offline:
         log("Tagging and organising with beets: skipped, offline")
     else:
-        log("Tagging and organising with beets")
+        log("Tagging and organising with beets (the %s layout)" % layout.name)
+        beets_config = _with_discogs_if_asked(beets_config, layout,
+                                              counter_dir)
         beets_log = commands.logs_file(script_dir, "beets.log")
         beets_offset = aimusic.log_offset(beets_log)
-        _run_in(ingest_dir, ["beet", "-c", beets_config,
-                             "import", "-Ciq", "-l", beets_log, "."])
+        options = musiclayout.beet_options(layout, ingest_dir)
+        # beets writes "added" in local time to the second; the reports look
+        # for what this run added from here on.
+        since = time.strftime("%Y-%m-%dT%H:%M:%S")
+        _run_in(ingest_dir, ["beet", "-c", beets_config, *options,
+                             "import", musiclayout.import_flags(layout),
+                             "-l", beets_log, "."])
         state.beets_summary = aimusic.resolve_skipped(
             ingest_dir, beets_config, beets_log, beets_offset,
-            meter_file=state.model_meter, run_beet=_run_in)
+            meter_file=state.model_meter, run_beet=_run_in,
+            beet_options=options,
+            import_flags=musiclayout.import_flags(layout, retry=True))
+        log("Reading beets' reports on the library")
+        state.beets_reports = beetsextras.run_reports(
+            ["beet", "-c", beets_config, *options], ingest_dir, since, log)
 
-    # Final name and structure cleanup, applied to the output only. It also
-    # prunes any folders left empty in the ingest tree, so no separate prune is
-    # needed here.
-    log("Cleaning ingested folder and file names")
-    _run_child("clean-folder-structure", [ingest_dir], script_dir)
+    if layout.beets_names and not offline:
+        # beets named the library, so its names stay: what it left behind of
+        # each album it moved follows the album, and the folders it emptied go.
+        log("Moving what beets left behind after the albums it moved")
+        _carry_after_beets(state, download_dir, ingest_dir, counter_dir, jobs)
+    else:
+        # Final name and structure cleanup, applied to the output only. It also
+        # prunes any folders left empty in the ingest tree, so no separate
+        # prune is needed here.
+        log("Cleaning ingested folder and file names")
+        _run_child("clean-folder-structure", [ingest_dir], script_dir)
 
     # The Opus copies of the finished lossless library, reusing convert-audio:
     # its -c also carries the cover art and other sidecar files across, and music
@@ -1681,6 +1721,123 @@ def _read_library_folders(state: Run, download_dir: str, ingest_dir: str,
         state.counters.bump("folderRedirects", redirects)
         state.folder_map = read_folder_map(
             os.path.join(counter_dir, "folderMap"))
+
+
+def _with_discogs_if_asked(beets_config: str, layout: musiclayout.Layout,
+                           scratch_dir: str) -> str:
+    """The config beets runs with: with the discogsToken setting, the run's
+    own copy of the shipped config, with Discogs added as a second source.
+
+    A config named with -c or beetsConfig is used as it is: it is the
+    user's, and so is whether it asks Discogs.
+    """
+    token = os.environ.get(beetsextras.DISCOGS_VARIABLE, "")
+    if not token:
+        return beets_config
+    shipped = musiclayout.config_path(layout, commands.config_dir())
+    if os.path.abspath(beets_config) != os.path.abspath(shipped):
+        log("  %s is set, but the config is not a shipped one: add the "
+            "discogs plugin to it to have Discogs asked"
+            % beetsextras.DISCOGS_VARIABLE)
+        return beets_config
+    try:
+        return beetsextras.write_run_config(beets_config, token, scratch_dir)
+    except (OSError, ValueError) as error:
+        log("  Discogs not asked: %s" % error)
+        return beets_config
+
+
+def where_beets_put(pairs_file: str, ingest_dir: str) -> dict:
+    """What each download folder became once beets moved the albums: the
+    library folder its flacs are in now, relative to the library.
+
+    Unlike ``build_ingested_folder_map``, a folder whose flacs are now in
+    SEVERAL folders is not ambiguous here. beets put them there, as the
+    "Disc N" folders of one album, so the folder they share is the answer.
+    It stays unmapped only when the folder they share is the library itself.
+    """
+    targets: dict[str, set] = {}
+    try:
+        with open(pairs_file, "rb") as handle:
+            fields = handle.read().split(b"\0")
+    except OSError:
+        return {}
+    for index in range(0, len(fields) - 1, 2):
+        source = fields[index].decode("utf-8", "surrogateescape")
+        library = fields[index + 1].decode("utf-8", "surrogateescape")
+        library_dir = os.path.dirname(library)
+        if not safety.is_within(ingest_dir, library_dir):
+            continue
+        targets.setdefault(os.path.dirname(source) or ".", set()).add(
+            os.path.relpath(library_dir, ingest_dir))
+    became = {}
+    for source_dir, folders in targets.items():
+        shared = (folders.pop() if len(folders) == 1
+                  else os.path.commonpath(sorted(folders)))
+        if shared and shared != ".":
+            became[source_dir] = shared.replace(os.sep, "/")
+    return became
+
+
+def _carry_after_beets(state: Run, download_dir: str, ingest_dir: str,
+                       counter_dir: str, jobs: int) -> None:
+    """``carryAfterBeets``: beets moves an album's tracks and its cover, and
+    nothing else, so the rip log, the scans and the rest stay behind in the
+    folder the run wrote. They follow the album here.
+
+    Where the album is now is read from the INGESTSOURCE tags, the same way
+    the run finds a renamed album. A folder that still holds a flac was not
+    moved whole, so it is left as it is, and so is a file whose name the
+    album's new folder already holds.
+    """
+    before = {
+        relative: ingested_dir_path(relative, ingest_dir, state.folder_map)
+        for relative in _download_folders(download_dir)[1:]
+        if not _under_any(relative, state.refused)}
+
+    state.ingested_sources = os.path.join(counter_dir, "afterBeetsSources")
+    state.ingested_pairs = os.path.join(counter_dir, "afterBeetsPairs")
+    for name in (state.ingested_sources, state.ingested_pairs):
+        with open(name, "wb"):
+            pass
+    library_flacs = _find_files(
+        ingest_dir, lambda name: enums.lower_extension_of(name) == "flac")
+    state.counters.start_phase("reading where beets moved the albums",
+                               "flacs", len(library_flacs))
+    workerpool.map(library_flacs, jobs, state.read_ingest_source)
+    state.counters.end_phase()
+    safety.exit_if_aborted()
+    became = where_beets_put(state.ingested_pairs, ingest_dir)
+
+    carried = held = 0
+    for relative, old in before.items():
+        new_relative = resolve_through_ancestors(relative, became, set())
+        new = safety.assert_within(
+            ingest_dir, os.path.join(ingest_dir, new_relative),
+            "ingest folder")
+        if (os.path.normpath(new) == os.path.normpath(old)
+                or not os.path.isdir(old)):
+            continue
+        names = sorted(os.listdir(old))
+        if any(enums.lower_extension_of(name) == "flac" for name in names):
+            continue
+        for name in names:
+            path = os.path.join(old, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            target = os.path.join(new, name)
+            if os.path.lexists(target):
+                log('  "%s" stays where it is: "%s" already holds a file of '
+                    "that name" % (_relative_to(path, ingest_dir),
+                                   _relative_to(new, ingest_dir)))
+                held += 1
+                continue
+            os.makedirs(new, exist_ok=True)
+            os.rename(path, target)
+            carried += 1
+    pruned = downloadcleanup.prune_empty_folders(ingest_dir)
+    log("  %d file(s) moved after their album, %d left where they were, "
+        "%d empty folder(s) removed" % (carried, held, pruned))
 
 
 def _encode_lossless(state: Run, lossless_tracks: list, jobs: int) -> None:

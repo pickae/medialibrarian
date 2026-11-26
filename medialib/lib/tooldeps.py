@@ -105,6 +105,8 @@ _TOOL_NOTES = {
     "ebook-convert": "the e-book format conversions (Calibre)|apt install calibre",
     "gs": "shrinking the images in PDFs (Ghostscript)|apt install ghostscript",
     "beet": "tagging the imported music (beets)|apt install beets",
+    "flac": "checking the ingested flacs for damage (beets' bad report)"
+            "|apt install flac",
     "yt-dlp": "fetching the podcast audio"
               "|pipx install --suffix=-nightly --pip-args=--pre yt-dlp (or: apt install yt-dlp)",
     "AtomicParsley": "embedding cover art into m4a podcast episodes"
@@ -183,6 +185,7 @@ _MACOS_HINTS = {
     "ebook-convert": "brew install --cask calibre",
     "gs": "brew install ghostscript",
     "beet": "brew install beets",
+    "flac": "brew install flac",
     "yt-dlp": "pipx install --suffix=-nightly --pip-args=--pre yt-dlp"
               " (or: brew install yt-dlp)",
     "AtomicParsley": "brew install atomicparsley",

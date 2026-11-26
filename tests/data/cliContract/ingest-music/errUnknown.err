@@ -13,10 +13,10 @@ Options:
     -h, --help    Print this help page.
     -c, --beets-config <file>
                   The beets config the tagging phase runs with. The one that
-                  ships with the package is the default, and its
-                  "directory: ." resolves to <ingestDir> because beets runs
-                  from inside it - a config that names a directory of its own
-                  moves the library there.
+                  ships with the package for the musicLayout setting is the
+                  default, and its "directory: ." resolves to <ingestDir>
+                  because beets runs from inside it - a config that names a
+                  directory of its own moves the library there.
                   Default the shipped medialib/config/beets.yaml
     -j, --jobs <jobs>
                   Run up to <jobs> encoder processes in parallel
@@ -50,6 +50,8 @@ Options:
 
 Dependencies:
     ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes and beets (unless -o).
-    Optional: flock (numbers the progress lines).
+    Optional: flock (numbers the progress lines), flac (beets' check of the
+    ingested files for damage) and python3-discogs-client (Discogs as a
+    second source, with the discogsToken setting).
 
 Nothing was changed.
