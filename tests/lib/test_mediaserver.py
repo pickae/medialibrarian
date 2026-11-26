@@ -45,7 +45,7 @@ def test_every_provider_names_a_client_that_answers_the_protocol():
                        "mark_played", "rate", "watchlist", "catalogue_key",
                        "add_to_watchlist"):
             assert callable(getattr(server, method)), (provider.name, method)
-        assert provider.client().NAME == provider.name
+        assert provider.name == provider.client().NAME
 
 
 def test_the_clients_are_the_ones_registered():

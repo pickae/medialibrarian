@@ -250,7 +250,7 @@ class TestQueue:
         # the plain extract of a commentary track: mkvtools numbers the whole
         # matroska while ffmpeg numbers each type from zero, so the second
         # track of FilmA is 0:a:1, and the input is the path the walk spelled
-        mkaA1 = _mka(ram, root, "FilmA2020/FilmA2020 1 DirectorCommentary")
+        mkaA1 = _mka(ram, root, "FilmA2020/FilmA2020.1 DirectorCommentary")
         extract_a = [c for c in w.calls() if c[0] == "ffmpeg"
                      and c[-1] == mkaA1][0]
         assert extract_a == [
@@ -279,17 +279,17 @@ class TestQueue:
         assert len(records) == 9
         expected = {
             ("transcribe", "en"): [
-                "FilmA2020 1 DirectorCommentary.en.srt",
-                "FilmA2020 4 CommentaryForeign.en.srt",
-                "FilmB2021 1 CommentaryTrackTwo.en.srt"],
-            ("transcribe", "nl"): ["FilmA2020 2 DutchCommentary.nl.srt"],
-            ("translate", "nl"): ["FilmA2020 2 DutchCommentary.en.srt"],
+                "FilmA2020.1 DirectorCommentary.en.srt",
+                "FilmA2020.4 CommentaryForeign.en.srt",
+                "FilmB2021.1 CommentaryTrackTwo.en.srt"],
+            ("transcribe", "nl"): ["FilmA2020.2 DutchCommentary.nl.srt"],
+            ("translate", "nl"): ["FilmA2020.2 DutchCommentary.en.srt"],
             ("transcribe", "de"): [
-                "FilmA2020 3 Audiokommentar.de.srt",
-                "FilmA2020 5 Regiekommentar.de.srt"],
+                "FilmA2020.3 Audiokommentar.de.srt",
+                "FilmA2020.5 Regiekommentar.de.srt"],
             ("translate", "de"): [
-                "FilmA2020 3 Audiokommentar.en.srt",
-                "FilmA2020 5 Regiekommentar.en.srt"],
+                "FilmA2020.3 Audiokommentar.en.srt",
+                "FilmA2020.5 Regiekommentar.en.srt"],
         }
         for record in records:
             fields = record.split("\x1f")
@@ -485,7 +485,7 @@ class TestNameless:
         _mka, srt, _task, lang, _siblings = records[0].split("\x1f")
         assert lang == "en"
         name = os.path.basename(srt)
-        assert name == "Film2020 1 Commentary.en.srt"
+        assert name == "Film2020.1 Commentary.en.srt"
         assert "null" not in name
 
     def test_the_word_is_the_one_the_matching_asks_about(self, w):
@@ -866,7 +866,7 @@ class TestExportEdges:
         fields = records[0].split("\x1f")
         assert fields[2] == "transcribe"
         assert fields[3] == "en"
-        assert fields[1].endswith("movie 0 Commentary.en.srt")
+        assert fields[1].endswith("movie.0 Commentary.en.srt")
 
     def test_a_failed_probe_assumes_english(self, w):
         logs, records, _sizes = self._one_track(
@@ -997,7 +997,7 @@ class TestExportEdges:
             discard_existing=lambda prefix, movie: (discarded.append(prefix),
                                                     True)[1])
         assert len(discarded) == 1
-        assert discarded[0].endswith("movie 0 ")
+        assert discarded[0].endswith("movie.0 ")
         assert not sidecar.exists()
         assert len(records) == 1
         assert any("discarded, transcribing again" in line for line in logs)
@@ -1020,7 +1020,7 @@ class TestExportEdges:
             discard_existing=lambda prefix, movie: (asked.append(prefix),
                                                     False)[1])
         assert len(asked) == 1
-        assert asked[0].endswith("movie 0 ")
+        assert asked[0].endswith("movie.0 ")
         assert sidecar.exists()
         assert records == []
 
@@ -1059,7 +1059,7 @@ class TestStaleNumber:
         # renumbered to the track's own number, the rest of the name as
         # written, and the srt itself untouched
         assert not stale.exists()
-        renumbered = root / "movie 2 Commentary.en.srt"
+        renumbered = root / "movie.2 Commentary.en.srt"
         assert renumbered.read_bytes() == \
             b"1\n00:00:00,000 --> 00:00:01,000\nstale\n"
         # and nothing extracted, detected or transcribed on top of it
@@ -1083,7 +1083,7 @@ class TestStaleNumber:
             w, str(root), str(ram), tracks, _detected("English"), "0 0")
 
         assert not stale.exists()
-        assert (root / "movie 2 Director Commentary by John.en.srt").is_file()
+        assert (root / "movie.2 Director Commentary by John.en.srt").is_file()
         assert records == []
 
     def test_but_not_the_one_the_film_s_other_commentary_also_fits(self, w):
@@ -1131,12 +1131,12 @@ class TestStaleNumber:
 
         # the German commentary's track renumbered it, and skipped
         assert not stale.exists()
-        renumbered = root / "movie 3 Audio Commentary German.en.srt"
+        renumbered = root / "movie.3 Audio Commentary German.en.srt"
         assert renumbered.read_bytes() == b"german\n"
         # the other commentary has no transcript, and was transcribed
         assert len(records) == 1
         assert records[0].split("\x1f")[1].endswith(
-            "movie 2 Audio Commentary.en.srt")
+            "movie.2 Audio Commentary.en.srt")
         assert sum("renumbered its transcript" in line for line in logs) == 1
 
     def test_a_transcript_an_older_version_named_without_a_language(self, w):
@@ -1150,7 +1150,7 @@ class TestStaleNumber:
             w, str(root), str(ram), tracks, _detected("English"), "0 0")
 
         assert not stale.exists()
-        assert (root / "movie 2 Commentary.srt").read_bytes() \
+        assert (root / "movie.2 Commentary.srt").read_bytes() \
             == b"old style\n"
         assert records == []
 
@@ -1170,7 +1170,7 @@ class TestStaleNumber:
             discard_existing=lambda prefix, movie: (discarded.append(prefix),
                                                      True)[1])
         assert len(discarded) == 1
-        assert discarded[0].endswith("movie 2 ")
+        assert discarded[0].endswith("movie.2 ")
         assert not stale.exists()
         assert len(records) == 1
         assert any("discarded, transcribing again" in line for line in logs)
@@ -1190,9 +1190,9 @@ class TestStaleNumber:
             discard_existing=lambda prefix, movie: (asked.append(prefix),
                                                      False)[1])
         assert len(asked) == 1
-        assert asked[0].endswith("movie 2 ")
+        assert asked[0].endswith("movie.2 ")
         assert not stale.exists()
-        renumbered = root / "movie 2 Commentary.en.srt"
+        renumbered = root / "movie.2 Commentary.en.srt"
         assert renumbered.read_bytes() == b"y" * 100000
         assert records == []
 
@@ -1210,7 +1210,7 @@ class TestStaleNumber:
 
         assert stale.exists()
         assert stale.read_bytes() == b"\x01opus\x80"
-        assert not (root / "movie 2 Commentary.opus").exists()
+        assert not (root / "movie.2 Commentary.opus").exists()
         assert len(records) == 1
         assert not any("renumbered its transcript" in line for line in logs)
 
@@ -1227,7 +1227,7 @@ class TestStaleNumber:
 
         assert records == []
         assert sorted(p.name for p in root.iterdir()
-                      if p.name.endswith(".srt")) == ["movie 2 Commentary.en.srt"]
+                      if p.name.endswith(".srt")) == ["movie.2 Commentary.en.srt"]
         assert sum("renumbered its transcript" in line for line in logs) == 1
         assert sum("dropping a second transcript" in line for line in logs) \
             == 1
@@ -1253,7 +1253,7 @@ class TestStaleNumber:
         assert records == []
         assert other.read_bytes() == b"theirs\n"
         assert not stale.exists()
-        assert (root / "movie 2 Commentary.en.srt").read_bytes() == b"ours\n"
+        assert (root / "movie.2 Commentary.en.srt").read_bytes() == b"ours\n"
 
 
 class TestStem:

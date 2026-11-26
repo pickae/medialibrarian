@@ -253,11 +253,23 @@ def _display_name(raw: str) -> str:
     return raw if raw and raw != "null" else COMMENTARY_NO_NAME
 
 
+def _both_spellings(prefix: str) -> tuple:
+    """One prefix :func:`commentary_prefix` wrote - or an older run did - as
+    every prefix that track's outputs may stand under."""
+    head = prefix[:-1] if prefix.endswith(" ") else prefix
+    for separator in plexnames.COMMENTARY_SEPARATORS:
+        stem, found, track = head.rpartition(separator)
+        if found and track.isdigit():
+            return commentary_prefixes(stem, track)
+    return (prefix,)
+
+
 def split_prefixes(prefixes) -> tuple:
-    """:func:`commentary_prefixes` - or one prefix - as (the directory they
-    are in, the start of a name each says), for a listing to be asked of."""
+    """:func:`commentary_prefixes` - or one prefix, widened to the spellings
+    its track's outputs may stand under - as (the directory they are in, the
+    start of a name each says), for a listing to be asked of."""
     if isinstance(prefixes, str):
-        prefixes = (prefixes,)
+        prefixes = _both_spellings(prefixes)
     directory = os.path.dirname(prefixes[0]) or "."
     return directory, tuple(os.path.basename(prefix) for prefix in prefixes)
 
@@ -367,7 +379,11 @@ def _renumber_stale_transcripts(file_stem: str, track_id, name: str,
 
     found = []
     for entry in entries:
-        if not (entry.startswith(stem_base + " ")
+        # Held off the film by either separator: the dot written now, or the
+        # space an older run wrote - which the rename below brings up to date.
+        if not (entry.startswith(tuple(
+                stem_base + separator
+                for separator in plexnames.COMMENTARY_SEPARATORS))
                 and entry.endswith(".srt")):
             continue
         tail = _STALE_TAIL.match(entry[len(stem_base) + 1:])
@@ -388,7 +404,8 @@ def _renumber_stale_transcripts(file_stem: str, track_id, name: str,
     found.sort(key=lambda pair: len(pair[1]), reverse=True)
     kept = 0
     for entry, rest in found:
-        target = "{} {} {}".format(stem_base, track_id, rest)
+        target = "{}{}{} {}".format(stem_base, plexnames.COMMENTARY_SEPARATOR,
+                                    track_id, rest)
         if os.path.exists(os.path.join(directory, target)):
             log("  track {}: WARNING: dropping a second transcript of the "
                 "same commentary: {}".format(track_id, entry))
@@ -673,7 +690,7 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                 name = name.replace("/", "").replace("&", "and")
                 name = rename(name)
                 file_stem = _strip_last_ext(file)
-                prefix = commentary_prefixes(file_stem, i - 1)
+                prefix = commentary_prefix(file_stem, i - 1)
                 base = commentary_stem(file_stem, i - 1, name)
                 # the large temp audio extract goes to RAM, mirroring the
                 # absolute disk path so the outputs end up next to the movie.

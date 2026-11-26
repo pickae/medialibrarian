@@ -114,7 +114,7 @@ class TestAfterTheSwap:
         run.Run(fragments_file="")._after_carrying(
             base + ".mkv", base, inputs, order, slots)
         assert calls == [["mkvextract", base + ".mkv", "tracks",
-                          "6:%s 4 With the director.en.srt" % base]]
+                          "6:%s.4 With the director.en.srt" % base]]
         assert not opus.exists()
 
 
