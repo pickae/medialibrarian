@@ -172,7 +172,7 @@ def test_the_improved_copy_swapped_in_is_read_afresh(film, tmp_path):
     rules._identify(film.path)
     new = tmp_path / "improved.mkv"
     new.write_bytes(b"\x1a\x45\xdf\xa3 a film")
-    old = os.path.splitext(film.path)[0] + " (old).mkv"
+    old = os.path.splitext(film.path)[0] + " - old.mkv"
     assert run_module._swap_in(str(new), film.path, old) == ""
     rules._identify(film.path)
     assert film.asked("mkvmerge") == 2

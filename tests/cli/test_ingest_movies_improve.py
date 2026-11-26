@@ -147,7 +147,7 @@ class TestTheSwap:
 
     def test_the_original_is_preserved_and_the_copy_took_its_place(self,
                                                                    remux):
-        assert os.path.isfile(remux["base"] + " (old).mkv")
+        assert os.path.isfile(remux["base"] + " - old.mkv")
         assert os.path.isfile(remux["movie"])
 
     def test_the_swapped_opus_is_a_remux_input(self, remux):
@@ -190,7 +190,7 @@ class TestWhatMkvmergeSaysDecides:
     def test_a_failed_remux_leaves_the_original_alone(self, remux):
         with open(remux["movie"], "rb") as handle:
             assert handle.read() == ORIGINAL
-        assert not os.path.exists(remux["base"] + " (old).mkv")
+        assert not os.path.exists(remux["base"] + " - old.mkv")
         assert [path for path in remux["scratch"].rglob("*")
                 if path.is_file()] == []
 
@@ -198,7 +198,7 @@ class TestWhatMkvmergeSaysDecides:
     def test_one_with_warnings_is_swapped_in(self, remux):
         with open(remux["movie"], "rb") as handle:
             assert handle.read() == REMUXED
-        with open(remux["base"] + " (old).mkv", "rb") as handle:
+        with open(remux["base"] + " - old.mkv", "rb") as handle:
             assert handle.read() == ORIGINAL
 
 
@@ -230,7 +230,7 @@ class TestASwapThatFails:
         remux = request.getfixturevalue("remux")
         with open(remux["movie"], "rb") as handle:
             assert handle.read() == ORIGINAL
-        assert not os.path.exists(remux["base"] + " (old).mkv")
+        assert not os.path.exists(remux["base"] + " - old.mkv")
         err = capsys.readouterr().err
         assert "could not be put in place" in err
         assert "Improved copy written" not in err
@@ -239,7 +239,7 @@ class TestASwapThatFails:
     def test_a_mkvmerge_killed_by_a_signal_is_not_swapped_in(self, remux):
         with open(remux["movie"], "rb") as handle:
             assert handle.read() == ORIGINAL
-        assert not os.path.exists(remux["base"] + " (old).mkv")
+        assert not os.path.exists(remux["base"] + " - old.mkv")
 
 
 class TestTheSwapFromATmpfsScratch:

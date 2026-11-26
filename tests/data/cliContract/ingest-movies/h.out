@@ -63,7 +63,7 @@ Usage:
     ------
     A full ingest runs all but backups (and extras-chapters without -A), one
     level below each folder given, and remuxes each film once into an
-    improved copy, keeping the original as "<name> (old).mkv". -O runs them
+    improved copy, keeping the original as "<name> - old.mkv". -O runs them
     one at a time over the whole tree.
     junk             deletes release junk (movieJunkExtensions) and samples
     layout           remuxes into Matroska, gives each film a folder, sorts the

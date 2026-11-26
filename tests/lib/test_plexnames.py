@@ -249,6 +249,34 @@ class TestTheKeptCopy:
     def test_and_nothing_else_is_one(self, name):
         assert plexnames.is_kept_copy(name) is False
 
+    @pytest.mark.parametrize("name", [
+        "The Movie (1999) - old.mkv",
+        "The Movie (1999) " + TAG + " - old.mkv",
+        "The Movie (1999) " + TAG + " {edition-Colorized} - old.mkv",
+        "The Movie (1999) [imdbid-tt0000001] - Colorized - old.mkv"])
+    def test_a_copy_kept_as_a_version_label_is_one_too(self, name):
+        """Written " - old" now, the spelling Jellyfin groups with the film's
+        other versions; " (old)" stops it grouping any of them."""
+        assert plexnames.is_kept_copy(name) is True
+
+    def test_a_new_copy_is_written_as_a_version_label(self):
+        assert plexnames.OLD_SUFFIX == " - old.mkv"
+        assert plexnames.LEGACY_OLD_SUFFIX in plexnames.OLD_SUFFIXES
+
+    @pytest.mark.parametrize("name,stem", [
+        ("The Movie (1999) - old.mkv", "The Movie (1999)"),
+        ("The Movie (1999) (old).mkv", "The Movie (1999)"),
+        ("The Movie (1999).mkv", "")])
+    def test_the_film_a_copy_was_kept_of(self, name, stem):
+        assert plexnames.kept_copy_stem(name) == stem
+
+    def test_a_kept_copy_is_never_renamed_for_jellyfin(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        tag = "[imdbid-tt0000001]"
+        named = "The Movie (1999) " + tag
+        assert plexnames.folder_renames("The Movie (1999)", tag, [
+            named + ".mkv", named + " - old.mkv"]) == []
+
 
 class TestReadingAFolderName:
     def test_an_untagged_folder_keeps_its_whole_name(self):

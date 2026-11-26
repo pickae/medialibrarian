@@ -8,7 +8,7 @@ aligned, the mkv tags and track flags are refreshed from the track layout,
 lossless audio is transcoded to the run's lossless audio target - opus by
 default - and commentary tracks are extracted and transcribed, and finally
 every film's main movie is remuxed once into an improved copy with the original
-kept beside it as "<name> (old).mkv".
+kept beside it as "<name> - old.mkv".
 
 The improvement is the interesting half, and it is one mkvmerge call: each
 lossless track that was converted swaps for its conversion in place, excessive audio
@@ -130,7 +130,7 @@ USAGE_TAIL = """
     ------
     A full ingest runs all but backups (and extras-chapters without -A), one
     level below each folder given, and remuxes each film once into an
-    improved copy, keeping the original as "<name> (old).mkv". -O runs them
+    improved copy, keeping the original as "<name> - old.mkv". -O runs them
     one at a time over the whole tree.
     junk             deletes release junk (movieJunkExtensions) and samples
     layout           remuxes into Matroska, gives each film a folder, sorts the

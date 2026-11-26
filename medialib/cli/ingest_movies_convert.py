@@ -88,16 +88,17 @@ def kept_original(movie: str) -> str:
     """
     directory, name = os.path.split(movie)
     stem = os.path.splitext(name)[0]
-    own = os.path.join(directory, stem + plexnames.OLD_SUFFIX)
-    if os.path.isfile(own):
-        return own
+    for suffix in plexnames.OLD_SUFFIXES:
+        own = os.path.join(directory, stem + suffix)
+        if os.path.isfile(own):
+            return own
 
     base, tag = plexnames.untagged_base(os.path.basename(
         directory.rstrip("/")))
     for other in sorted(rules._names_in(directory)):
-        if not other.endswith(plexnames.OLD_SUFFIX):
+        kept = plexnames.kept_copy_stem(other)
+        if not kept:
             continue
-        kept = other[:-len(plexnames.OLD_SUFFIX)]
         # Guarded, or a stray "(old)" belonging to nothing would read as the
         # plain film's copy: an unreadable stem gives no edition and no part,
         # and that is exactly the plain film's name.

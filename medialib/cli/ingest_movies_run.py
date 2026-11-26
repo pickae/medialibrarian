@@ -146,7 +146,7 @@ class Run:
 
     def improve_main_movie(self, movie: str) -> None:
         """Remux ONE main movie into an improved copy, keeping the original
-        beside it as "<name> (old).mkv" - so nothing is ever lost and a second
+        beside it as "<name> - old.mkv" - so nothing is ever lost and a second
         run is a no-op, the "(old)" sibling being what makes the folder skip
         itself.
 
@@ -763,7 +763,7 @@ class Run:
             return False
 
         if toolcapture.warnings_at_most(status):
-            old = os.path.splitext(movie)[0] + " (old).mkv"
+            old = os.path.splitext(movie)[0] + plexnames.OLD_SUFFIX
             failure = _swap_in(out, movie, old)
             if failure:
                 rules._remove(out)
@@ -4093,7 +4093,7 @@ def _lanes(state, root: str, subtitle_work: bool, locks, row=None,
     safety.exit_if_aborted()
 
     # An improved copy of each film's main movie, with the original kept as
-    # "<name> (old).mkv" - every one the remux lane did not get to.
+    # "<name> - old.mkv" - every one the remux lane did not get to.
     if fetching is not None:
         fetching.finish()
     log("Phase: remuxing improved main movie copies")

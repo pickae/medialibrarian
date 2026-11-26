@@ -11,7 +11,7 @@ transcribed commentaries and the chapters the disc had.
 | --- | --- |
 | **Takes** | one or more folders of films |
 | **Writes** | in place: the improved `.mkv` and `.srt` sidecars (the converted lossless audio is made in RAM and only ever lands inside the improved `.mkv`); the sweeps also write lists under `logs/ingest-movies/` |
-| **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
+| **Input** | changed — that is the job; each remuxed original is kept as `<name> - old.mkv` |
 | **Reruns** | a film that already has its `(old)` backup is not remuxed again |
 | **Network** | TMDb, OpenSubtitles, SubDL, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter — and your own Plex server |
 
@@ -29,7 +29,7 @@ given (one level deep, not the whole tree):
 - **finds commentaries the file does not flag** and flags them before anything else reads the tracks ([details](#commentaries-the-file-does-not-flag))
 - **reads picture subtitles into text** where a language has no text subtitle (needs `seconv`) ([details](#picture-subtitles-read-into-text))
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
-- **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
+- **remuxes each film once into an improved copy**, keeping the original as `<name> - old.mkv` ([details](#what-a-full-ingest-does))
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
 - last, **compares each film with the copy your Plex library already has**, if any ([details](#plex-comparison))
 - with `-r`, after all of that, **converts the remuxes** and writes each converted copy beside its film ([details](#remux-conversion--r))
@@ -400,7 +400,7 @@ file reporting what its bitstream really is. A file whose RPU is really there is
 only checked, never rewritten, and a copy that came out less HDR than the source
 is thrown away and the original left alone.
 
-The original is preserved as `<name> (old).mkv`, so nothing is lost and a rerun
+The original is preserved as `<name> - old.mkv`, so nothing is lost and a rerun
 is a no-op — which is also what makes the Dolby Vision work a one-time job per
 film: a film that already has its `(old)` backup is not remuxed again. Once the
 copy has stood the checks, [`-O backups`](#dropping-the-old-backups) drops that
@@ -1077,7 +1077,7 @@ and an unfinished one is redone.
 
 **`-O backups` drops the `(old)` originals the improved copies were kept beside, and
 nothing else.** It is the end of the remux's work: a film whose original still
-stands beside it as `<name> (old).mkv` is asked about its copy, and the backup
+stands beside it as `<name> - old.mkv` is asked about its copy, and the backup
 goes where the copy is the whole of the original.
 
 The copy is asked three things:

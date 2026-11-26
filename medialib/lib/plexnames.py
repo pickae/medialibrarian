@@ -170,7 +170,24 @@ _YEAR_LEADING = re.compile(r"^\(?[12][0-9]{3}\)?")
 # What an improved remux leaves the original under, lower-cased for the compare.
 # A copy is never renamed: it is the film as it arrived, and a tag on it would
 # offer Plex a second edition of every film that has one.
-OLD_SUFFIX = " (old).mkv"
+#
+# Written as a version label - " - old" - because that is the one spelling
+# both servers take for another version of the same film: Jellyfin refuses to
+# group a folder's versions at all while one file in it ends in anything else,
+# such as the " (old)" this was written as before. Both are read back, so a
+# copy kept by an older run is still found.
+OLD_SUFFIX = " - old.mkv"
+LEGACY_OLD_SUFFIX = " (old).mkv"
+OLD_SUFFIXES = (OLD_SUFFIX, LEGACY_OLD_SUFFIX)
+
+
+def kept_copy_stem(name: str) -> str:
+    """The film a kept original was copied from, by name: ``name`` with the
+    kept copy's suffix taken off - "" where it carries none."""
+    for suffix in OLD_SUFFIXES:
+        if name.lower().endswith(suffix):
+            return name[:-len(suffix)]
+    return ""
 
 # The edition a remux converted by ingest-movies -r is written under, beside the
 # film it was converted from: the server offers the two as one film with a
@@ -365,7 +382,7 @@ def is_kept_copy(path: str) -> bool:
     The suffix comes last, after every tag, so a copy made from an
     already-tagged film answers yes as readily as one made before the tagging.
     """
-    return (os.path.basename(path).lower().endswith(OLD_SUFFIX)
+    return (os.path.basename(path).lower().endswith(OLD_SUFFIXES)
             or is_converted_copy(path))
 
 
