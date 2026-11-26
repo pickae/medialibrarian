@@ -7,7 +7,7 @@ described under [File safety](docs/file-safety.md). What they print, and the `-v
 `-q` that set how much, is described under
 [What a run prints](docs/output.md).
 
-Each is an installed command. From a checkout, `pip install .` puts all twenty-two
+Each is an installed command. From a checkout, `pip install .` puts all twenty-three
 on your PATH. The per-machine files — the `data/` tables, the `logs/` logs —
 live in **the medialib data directory**: `~/.local/share/medialib` (or
 `$XDG_DATA_HOME/medialib` if it is set), the checkout itself under
@@ -41,6 +41,7 @@ apply to it.
 | --- | --- |
 | [`convert-video`](docs/commands/convert-video.md) | Re-encode a video library (AV1/x265 + Opus) |
 | [`ingest-movies`](docs/commands/ingest-movies.md) | Sort, clean and improve a movie library in place |
+| [`ingest-series`](docs/commands/ingest-series.md) | Sort, name and improve a TV-show library in place |
 | [`plex-letterboxd-sync`](docs/commands/plex-letterboxd-sync.md) | Sync watched films between Plex and Letterboxd |
 
 ### Books, comics and images

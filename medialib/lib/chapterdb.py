@@ -508,16 +508,22 @@ def find_set(title: str, existing: Existing,
              fetch: Callable | None = None, *,
              log: Callable[[str], None] = runlog.log,
              use_llm: bool = True,
-             meter_file: str = "") -> tuple:
-    """(the set for this film or ``None``, whether the archive answered)."""
+             meter_file: str = "",
+             row_fits: Callable | None = None) -> tuple:
+    """(the set for this film or ``None``, whether the archive answered).
+
+    ``row_fits`` says whether a search row is filed under this file, where
+    that is not :func:`same_title` - an episode, whose sets are filed under
+    its show and its episode (ingest-series)."""
     fetch = fetch or ask_archive
+    fits = row_fits or (lambda row: same_title(title, row.title))
     queries = [title] + ([_ascii(title)] if _ascii(title) != title else [])
     rows: list = []
     for query in queries:
         found = search(query, fetch)
         if found is None:
             return None, False
-        rows = [row for row in found if same_title(title, row.title)
+        rows = [row for row in found if fits(row)
                 and abs(row.seconds - existing.seconds)
                 <= LISTED_TOLERANCE_SECONDS]
         if rows:
@@ -532,11 +538,13 @@ def find_set(title: str, existing: Existing,
                   meter_file=meter_file), True
 
 
-def examine(movie: str) -> tuple:
+def examine(movie: str, title_of: Callable[[str], str] = film_title) -> tuple:
     """(verdict, title, existing) for one film, without asking the archive
     anything: "untagged", "failed" or "kept" when it is not to be looked up,
-    and "" when it is - by ``title``, for a film with ``existing``."""
-    title = film_title(movie)
+    and "" when it is - by ``title``, for a film with ``existing``.
+    ``title_of`` reads the title, :func:`film_title` unless another command
+    knows its files by another (an episode by its show's)."""
+    title = title_of(movie)
     if not title:
         return "untagged", "", None
     existing = existing_chapters(movie)
@@ -549,7 +557,9 @@ def examine(movie: str) -> tuple:
 
 def findings(directory: str, log: Callable[[str], None],
              fetch: Callable | None = None, *,
-             meter_file: str = ""):
+             meter_file: str = "", movies: list | None = None,
+             title_of: Callable[[str], str] = film_title,
+             row_fits_for: Callable | None = None):
     """Every film under ``directory`` as ``(movie, verdict, existing, set)``:
     the verdicts :func:`examine` comes to, "unmatched" for a film the archive
     has no fitting set for, and "found" with the set it has.
@@ -562,17 +572,23 @@ def findings(directory: str, log: Callable[[str], None],
 
     Each film opens with its place in the folder, and a line under it says
     what it came to - for a film a set was found for, which set it is.
+
+    ``movies``, ``title_of`` and ``row_fits_for(movie, existing)`` are
+    another command's files and how each is looked up (ingest-series').
     """
-    movies = subtitlefiles.subtitle_movies(directory)
+    if movies is None:
+        movies = subtitlefiles.subtitle_movies(directory)
     for index, movie in enumerate(movies, start=1):
         log(runlog.film_header(index, len(movies), directory, movie))
-        verdict, title, existing = examine(movie)
+        verdict, title, existing = examine(movie, title_of)
         if verdict:
             log("  " + _NOT_LOOKED_UP[verdict])
             yield movie, verdict, existing, None
             continue
-        chosen, answered = find_set(title, existing, fetch, log=log,
-                                    meter_file=meter_file)
+        chosen, answered = find_set(
+            title, existing, fetch, log=log, meter_file=meter_file,
+            row_fits=(row_fits_for(movie, existing) if row_fits_for
+                      else None))
         if not answered:
             log("WARNING: the chapter archive at %s did not answer - no more "
                 "films are looked up this run"
@@ -617,13 +633,16 @@ def empty_outcome() -> dict:
 
 def add_chapters(directory: str, log: Callable[[str], None],
                  fetch: Callable | None = None, *,
-                 meter_file: str = "") -> dict:
+                 meter_file: str = "", movies: list | None = None,
+                 title_of: Callable[[str], str] = film_title,
+                 row_fits_for: Callable | None = None) -> dict:
     """Give every tagged film under ``directory`` the chapters :func:`choose`
     picks for it, one film at a time, and return the films by what came of
-    them. ``fetch`` is :func:`findings`'."""
+    them. ``fetch`` and the rest are :func:`findings`'."""
     outcome = empty_outcome()
-    for movie, verdict, existing, chosen in findings(directory, log, fetch,
-                                                     meter_file=meter_file):
+    for movie, verdict, existing, chosen in findings(
+            directory, log, fetch, meter_file=meter_file, movies=movies,
+            title_of=title_of, row_fits_for=row_fits_for):
         if verdict == "found":
             verdict = apply_set(movie, existing, chosen, log)
         outcome[verdict].append(movie)

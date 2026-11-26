@@ -162,6 +162,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `commentary-judge` | - | reasoning | balanced |
 | `subtitle-ads` | - | - | light |
 | `curated-lists` | - | reasoning, local | balanced |
+| `episode-seam` (`ingest-series -A`, splitting a multi-episode file) | - | reasoning | balanced |
 
 `error-triage` prefers a local model because error logs carry library paths,
 and is strictly advisory: it never retries commands, deletes files or changes

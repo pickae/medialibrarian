@@ -64,9 +64,9 @@ def _labels_editions() -> bool:
 # the tag whether it sits on the folder or the file, and is indifferent to
 # the order tags come in.
 ID_TAG_RE = re.compile(
-    r"\{(?:imdbid|tmdbid|imdb|tmdb)-[^{}]*\}"
-    r"|\[(?:imdbid|tmdbid|imdb|tmdb)-[^\[\]]*\]"
-    r"|\((?:imdbid|tmdbid|imdb|tmdb)-[^\(\)]*\)",
+    r"\{(?:imdbid|tmdbid|tvdbid|imdb|tmdb|tvdb)-[^{}]*\}"
+    r"|\[(?:imdbid|tmdbid|tvdbid|imdb|tmdb|tvdb)-[^\[\]]*\]"
+    r"|\((?:imdbid|tmdbid|tvdbid|imdb|tmdb|tvdb)-[^\(\)]*\)",
     re.I)
 
 # The Plex edition tag, which needs a Plex Pass to be DISPLAYED but is
@@ -75,17 +75,18 @@ ID_TAG_RE = re.compile(
 EDITION_RE = re.compile(r"\{edition-([^{}]*)\}")
 
 # The provider key and number of an id tag, whichever way it is written.
-_ID_PARTS = re.compile(r"[(\[{](imdbid|tmdbid|imdb|tmdb)-(.+)[)\]}]$", re.I)
+_ID_PARTS = re.compile(r"[(\[{](imdbid|tmdbid|tvdbid|imdb|tmdb|tvdb)-(.+)[)\]}]$",
+                       re.I)
 
 
 def _id_parts(tag: str) -> tuple:
     """An id tag, written either way, as (provider, number): ("imdb",
-    "tt0120737"), ("tmdb", "12345") - ("", "") where it is not one."""
+    "tt0120737"), ("tmdb", "12345"), ("tvdb", "81189") for a series - ("",
+    "") where it is not one."""
     match = _ID_PARTS.match(tag)
     if not match:
         return "", ""
-    provider = ("imdb" if match.group(1).lower().startswith("imdb")
-                else "tmdb")
+    provider = match.group(1).lower()[:4]
     return provider, match.group(2)
 
 
@@ -196,10 +197,12 @@ def kept_copy_stem(name: str) -> str:
 CONVERTED_EDITION = "AV1"
 # The marker either way: the Plex edition tag that ends on it, or the Jellyfin
 # version label that does - the stacking token, where the film has one, still
-# standing after it.
+# standing after it - or, for an episode (which Plex gives no edition), the
+# bracketed version Plex ignores and merges by (medialib/lib/seriesnames.py).
 _CONVERTED = re.compile(
     r"\{edition-(?:[^{}]* )?" + CONVERTED_EDITION + r"\}"
-    r"|\s+-\s+(?:\S+ )*AV1(?=\s|\.|$)")
+    r"|\s+-\s+(?:\S+ )*AV1(?=\s|\.|$)"
+    r"|\s+\[" + CONVERTED_EDITION + r"\](?=\s|\.|$)")
 
 # The wrappers a hand-written version name tends to arrive in.
 _WRAPPERS = (("(", ")"), ("[", "]"))

@@ -238,7 +238,8 @@ def film_languages(tag: str) -> FilmLanguages:
     """
     api_key = os.environ.get("tmdbApiKey", "")
     kind, value = plexnames.id_of(tag or "")
-    if not api_key or not kind:
+    # A TVDB tag is a series', which /movie/ knows nothing of.
+    if not api_key or kind not in ("imdb", "tmdb"):
         return FilmLanguages()
     value = value.strip().lower()
     if kind == "imdb":

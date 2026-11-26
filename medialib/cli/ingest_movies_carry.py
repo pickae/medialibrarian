@@ -78,11 +78,24 @@ class LibraryCarry:
 
     ``films`` lists the main movies the remux would improve, ``film_tags``
     is the run's :class:`lanes.FilmTags`, and ``log`` where it speaks.
+
+    The rest is what another command's files are found and known by
+    (ingest-series' episodes): ``read_library`` reads the server once and
+    answers what ``found_in`` looks a file up in; ``found_in(movie,
+    library, tag)`` the library's copies of it; ``key`` what a file's
+    carry-over is kept under across the run's renames; ``edition`` a file's
+    (edition, part).
     """
 
     def __init__(self, root: str, films, film_tags, log,
-                 ram_root: str = "", keep_parts: frozenset = frozenset()) -> None:
+                 ram_root: str = "", keep_parts: frozenset = frozenset(), *,
+                 read_library=None, found_in=None, key=None,
+                 edition=None) -> None:
         self._root = root
+        self._read_library = read_library or _read_films
+        self._found_in = found_in or _found_film
+        self._key = key or plexphase.folder_key
+        self._edition = edition or _edition
         self._keep_parts = keep_parts
         self._ram_root = ram_root
         self._films = films
@@ -120,36 +133,35 @@ class LibraryCarry:
         provider = mediaserver.provider()
         server = provider.local()
         try:
-            copies = server.copies()
+            library = self._read_library(server)
         except mediaserver.MediaServerError as error:
             self._said.append(
                 "%s carry-over: SKIPPED, the server could not be asked (%s) - %s"
                 % (provider.display, error, provider.hint()))
             return
-        index = plexphase._index(copies)
         for movie in self._films():
             if safety.abort_requested():
                 return
             try:
-                self._look_up(movie, index, copies)
+                self._look_up(movie, library)
             except Exception as error:  # noqa: BLE001 - one film, not the run
                 self._said.append(mediaserver.provider().display
                                   + " carry-over: WARNING, %s could not be "
                                   "looked up: %s" % (movie, error))
 
-    def _look_up(self, movie: str, index: dict, copies: list) -> None:
+    def _look_up(self, movie: str, library) -> None:
         tag = ""
         if self._film_tags is not None:
             try:
                 tag = self._film_tags.tag_of(movie)
             except Exception:  # noqa: BLE001 - looked for by title instead
                 tag = ""
-        found, _how = plexphase._found(movie, index, copies, tag)
+        found = self._found_in(movie, library, tag)
         readable = [copy for copy in found if len(copy.files) == 1
                     and os.path.isfile(copy.files[0])]
         if not readable:
             return
-        edition, part = _edition(movie)
+        edition, part = self._edition(movie)
         if part:
             return
         new = plexcompare.read_profile(movie, edition)
@@ -164,7 +176,7 @@ class LibraryCarry:
                 timing, untimed = plexphase.timing_of(new, old)
             results.append(_Found(old, timing, untimed))
         with self._guard:
-            self._found[plexphase.folder_key(movie)] = results
+            self._found[self._key(movie)] = results
 
     # --- settling ---------------------------------------------------------
 
@@ -183,7 +195,7 @@ class LibraryCarry:
         for movie in self._films():
             if safety.abort_requested():
                 return
-            found = self._found.get(plexphase.folder_key(movie))
+            found = self._found.get(self._key(movie))
             if not found:
                 continue
             plan = self._plan(movie, found, keeps_for)
@@ -208,7 +220,7 @@ class LibraryCarry:
             if plan.chapters is not None and not chapterdb.write_chapters(
                     movie, plan.chapters):
                 self._log("  WARNING: the chapters could not be written")
-            self.plans[plexphase.folder_key(movie)] = plan
+            self.plans[self._key(movie)] = plan
             if plan.audio:
                 preparing.append((movie, plan))
         for movie, plan in preparing:
@@ -227,7 +239,7 @@ class LibraryCarry:
 
     def _plan(self, movie: str, found: list, keeps_for):
         """The carry-over that takes the most, of each library copy's."""
-        edition, _part = _edition(movie)
+        edition, _part = self._edition(movie)
         new = plexcompare.read_profile(movie, edition)
         if new is None:
             return None
@@ -461,7 +473,7 @@ class LibraryCarry:
         """The film's carried tracks and transcripts, as remux inputs."""
         film = lanes.key(movie)
         inputs = list(self._inputs.get(film, ()))
-        plan = self.plans.get(plexphase.folder_key(movie))
+        plan = self.plans.get(self._key(movie))
         if not inputs or plan is None or plan.timing is None:
             return inputs
         sync = "%d,%.9f" % (round(plan.timing.start * 1000), plan.timing.speed)
@@ -479,7 +491,7 @@ class LibraryCarry:
         return inputs
 
     def plan_for(self, movie: str):
-        return self.plans.get(plexphase.folder_key(movie))
+        return self.plans.get(self._key(movie))
 
 
 def _srts_beginning(staged: str) -> list:
@@ -490,6 +502,18 @@ def _srts_beginning(staged: str) -> list:
         return []
     return [os.path.join(directory, name) for name in names
             if name.startswith(prefix + ".") and name.endswith(".srt")]
+
+
+def _read_films(server) -> tuple:
+    """The server's film libraries, read once: (index by id, every copy)."""
+    copies = server.copies()
+    return plexphase._index(copies), copies
+
+
+def _found_film(movie: str, library: tuple, tag: str) -> list:
+    index, copies = library
+    found, _how = plexphase._found(movie, index, copies, tag)
+    return found
 
 
 def _edition(movie: str) -> tuple:

@@ -65,6 +65,7 @@ from medialib.lib import (
     runcontext,
     runlog,
     safety,
+    seriesfolders,
     settings,
     statusline,
     subtitleads,
@@ -77,6 +78,7 @@ from medialib.lib import (
     tmdbworklists,
     toolcapture,
     tooldeps,
+    treewalk,
     workerpool,
 )
 
@@ -386,6 +388,9 @@ class Run:
         The film is known by the id tag its own name or its folder's carries,
         and before the tagging has put one there by what the tagging would
         put (:class:`lanes.FilmTags`).
+
+        A run given ``languages_of`` asks that instead: ingest-series, whose
+        files are episodes and whose original language is the show's.
         """
         return self._film_languages(movie, wait=True)
 
@@ -397,6 +402,9 @@ class Run:
 
     def _film_languages(self, movie: str,
                         wait: bool) -> tmdbidentify.FilmLanguages:
+        languages_of = getattr(self, "languages_of", None)
+        if languages_of is not None:
+            return languages_of(movie)
         if not os.environ.get("tmdbApiKey"):
             return tmdbidentify.FilmLanguages()
         stem = os.path.splitext(os.path.basename(movie))[0]
@@ -936,7 +944,7 @@ def improve_main_movies(state, root: str, skip=(), around=None) -> None:
     them - and ``around``, when given, is what each remux is run inside of: the
     locks a film is held under while other lanes may still be at work.
     """
-    for movie in main_movies(root, say=runlog.detail):
+    for movie in items_of(state, root, say=runlog.detail):
         if lanes.key(movie) in skip:
             continue
         if around is None:
@@ -944,6 +952,14 @@ def improve_main_movies(state, root: str, skip=(), around=None) -> None:
             continue
         with around(movie):
             state.improve_main_movie(movie)
+
+
+def items_of(state, root: str, say=None) -> list:
+    """The files the run's per-file phases work through under ``root``: the
+    run's own walker where it was given one (``state.items``, ingest-series'
+    episodes), and the films :func:`main_movies` finds where it was not."""
+    walker = getattr(state, "items", None) or main_movies
+    return walker(root, say=say) if say is not None else walker(root)
 
 
 def main_movies(root: str, say=None) -> list:
@@ -1269,11 +1285,21 @@ def _main_one(declaration, result, program: str, script_dir: str,
     if roots is None:
         return 1
 
+    # A show is ingest-series' to ingest: read as films, "Show (2005)" would
+    # be looked up and named as one, and its loose episodes sorted into film
+    # folders - the step that is hardest to undo. Asked before anything is
+    # moved, and every walk of the run passes over the shows found.
+    roots, names, shows = _without_shows(roots, names)
+    if not roots:
+        return 1
+
     try:
-        return _run_phases(result, program, script_dir, roots, names,
-                           fragments_file, kept, wanted, keep_parts,
-                           omit_phases, phase)
+        with treewalk.holding_out(shows):
+            return _run_phases(result, program, script_dir, roots, names,
+                               fragments_file, kept, wanted, keep_parts,
+                               omit_phases, phase)
     finally:
+        _report_shows(shows)
         # Every phase below can pin an ffmpeg or settle a run directory, and
         # each refusal after that must hand it back, not only a finished run.
         ramscratch.run_exit_cleanup()
@@ -1948,7 +1974,8 @@ def _subtitle_totals(totals: dict) -> str:
 
 
 def _drop_backups(program: str, script_dir: str, roots: list, names: list,
-                  write: bool, kept: tuple) -> int:
+                  write: bool, kept: tuple, items=None,
+                  backups_list: str = "") -> int:
     """The drop-backups sweep: the "(old)" originals kept beside the improved
     copies, asked the three things the copy was asked by, and dropped where it
     stands up to them.
@@ -1958,6 +1985,9 @@ def _drop_backups(program: str, script_dir: str, roots: list, names: list,
     later run does not remux the film again, and only then is the original
     dropped: a tag that cannot be written keeps the original, since it is what
     would then stand in for it.
+
+    ``items`` and ``backups_list`` are another command's walker and list
+    (ingest-series'), where it runs this sweep over its own files.
     """
     tools = ["mkvmerge", "ffprobe"] + (["mkvpropedit"] if write else [])
     if tooldeps.require_tools(program, tools):
@@ -1970,7 +2000,7 @@ def _drop_backups(program: str, script_dir: str, roots: list, names: list,
             'copies in "%s"' % root
             + ("" if write else " - DRY RUN, nothing will be changed"))
         held: list = []
-        candidates = convertphase.drop_candidates([root])
+        candidates = convertphase.drop_candidates([root], items)
         if not candidates:
             log("  No (old) original kept beside an improved copy")
         for movie, old in candidates:
@@ -1991,7 +2021,9 @@ def _drop_backups(program: str, script_dir: str, roots: list, names: list,
                 log("  %s - %s" % (place, "dropped" if write
                                    else "would be dropped"))
                 dropped += 1
-        _write_backup_list(commands.logs_file(script_dir, BACKUPS_LIST % name),
+        _write_backup_list(commands.logs_file(script_dir, (backups_list
+                                                           or BACKUPS_LIST)
+                                              % name),
                            root, held, write)
         safety.exit_if_aborted()
     if not write:
@@ -2097,7 +2129,7 @@ def _roles_only(program: str, roots: list) -> int:
 
 
 def _ocr_only(program: str, script_dir: str, roots: list,
-              wanted: tuple | None) -> int:
+              wanted: tuple | None, items=None) -> int:
     """The picture-subtitle phase on its own: each main film's picture
     subtitles in the spokenLanguages setting's languages read into the
     "<movie>.xx.srt" sidecars it has none of, by seconv. The sidecars are left
@@ -2125,7 +2157,7 @@ def _ocr_only(program: str, script_dir: str, roots: list,
         for root in roots:
             log('Phase: reading the picture subtitles of the films in "%s"'
                 % root)
-            for movie in main_movies(root):
+            for movie in (items or main_movies)(root):
                 if safety.abort_requested():
                     break
                 tracks = rules._identify(movie)
@@ -2456,9 +2488,12 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
                          usage: aicommentarynames.Usage | None = None,
                          film_tags: dict[tuple[str, str], str] | None = None,
                          whisper: dict | None = None,
-                         whisper_provider=None) -> None:
+                         whisper_provider=None, films=None,
+                         names_list: str = "") -> None:
     """One folder's commentary tracks named, or what would be, and its list
-    written.
+    written. ``films`` and ``names_list`` are another command's files - as
+    ``(file, the title and year it is named for)`` - and list
+    (ingest-series': its episodes, named for their show).
 
     Queued, the naming is a queue of prepared items: working out each film's
     names - the database asked at its polite pace - is the producer, and each
@@ -2475,9 +2510,10 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
     planned: list = []
 
     def plans():
-        films = list(_commentary_films(root))
-        for index, (movie, base) in enumerate(films, start=1):
-            log(runlog.film_header(index, len(films), root, movie))
+        found = list(films(root) if films is not None
+                     else _commentary_films(root))
+        for index, (movie, base) in enumerate(found, start=1):
+            log(runlog.film_header(index, len(found), root, movie))
             context: list[str] = []
             plan, why = _plan_commentary_names(
                 movie, base, lookup, fragments_file,
@@ -2519,7 +2555,8 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
             else:
                 named.append((relative, plan["lines"]))
     _write_commentary_names_list(
-        commands.logs_file(script_dir, COMMENTARY_NAMES_LIST % name),
+        commands.logs_file(script_dir, (names_list or COMMENTARY_NAMES_LIST)
+                           % name),
         root, named, refused, write)
     if proposal_reasons is not None and refused:
         proposal_reasons.extend(ailistproposals.reasons_from_commentary(
@@ -3253,7 +3290,7 @@ def _detect_commentaries(state, root: str) -> None:
     file flags but leaves unnamed is numbered the same way, so its transcript
     is too. A film already improved was looked at by the run that improved it,
     and is not listened to again."""
-    for movie in main_movies(root):
+    for movie in items_of(state, root):
         if safety.abort_requested():
             return
         tracks = rules._identify(movie)
@@ -3584,6 +3621,34 @@ def _commentary_only(program: str, script_dir: str, roots: list,
     _write_commentary_orphans(script_dir, orphans)
     _write_unfixed_movies(script_dir, unfixed)
     return workerpool.exit_status(0)
+
+
+def _without_shows(roots: list, names: list) -> tuple[list, list, list]:
+    """(the roots that are not a show, their names, the shows below them).
+
+    A root that is itself a show is dropped, said so; the shows below one
+    that is not are kept to hold out of every walk."""
+    kept_roots, kept_names, shows = [], [], []
+    for root, name in zip(roots, names, strict=True):
+        if seriesfolders.looks_like_series(root):
+            log('"%s" holds a show, not films - skipped. ingest-series is the '
+                "command for it." % root)
+            shows.append(root)
+            continue
+        kept_roots.append(root)
+        kept_names.append(name)
+        shows.extend(seriesfolders.series_folders(root))
+    return kept_roots, kept_names, shows
+
+
+def _report_shows(shows: list) -> None:
+    """The shows a run passed over, listed once at its end."""
+    if not shows:
+        return
+    log("%d folder(s) hold a show rather than films and were left alone - "
+        "ingest-series is the command for them:" % len(shows))
+    for show in shows:
+        log("  " + show)
 
 
 def _capitalise(text: str) -> str:
@@ -4081,7 +4146,7 @@ def _lanes(state, root: str, subtitle_work: bool, locks, row=None,
     if commentary_work is None:
         commentary_work = subtitle_work
     carry = getattr(state, "carry", None)
-    remux = lanes.RemuxLane(main_movies(root), state.improve_main_movie,
+    remux = lanes.RemuxLane(items_of(state, root), state.improve_main_movie,
                             locks, commentary_work, log, row,
                             subtitles=fetching, carry=carry)
     beside = commentary_work and state.whisper.get("device") == "cuda"
@@ -4421,7 +4486,7 @@ def _transcode_lossless(state, root: str, jobs: int | None = None,
     # Only the films the improve pass will remux: a conversion is made for the
     # improved copy and for nothing else, so one for a kept original, an extra
     # or a film already improved would only sit in RAM until the run ends.
-    movies = main_movies(root)
+    movies = items_of(state, root)
     if "audio" in getattr(state, "keep_parts", frozenset()):
         # Lossless audio stays as it is: nothing to encode, so every film is
         # ready for the remux lane at once.

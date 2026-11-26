@@ -1,0 +1,92 @@
+Unknown option: --no-such-option
+
+Usage:
+    ingest-series [options] <seriesDir>...
+
+    seriesDir     directory holding the shows to ingest, or one show's own
+                  folder. Several may be given: each is worked through in
+                  full, one after the other, in the order they were typed.
+                  With tagging each gets lists of its own, named after it.
+
+    Options
+    -------
+    -r, --convert-remuxes
+                  also convert the remuxes, last of all, with convert-video -k,
+                  writing each converted copy beside its episode as a second
+                  version of it. The episode itself is left as it is. A full
+                  ingest only.
+    -k, --keep [part]
+                  keep <part>, taking nothing away: audio (lossless audio stays
+                  lossless), tracks (no track is dropped) and dv (a dual-layer
+                  Dolby Vision profile 7 keeps its enhancement layer),
+                  comma-separated; a bare -k keeps all three. Cannot be
+                  combined with -r.
+    -o, --omit [phase]
+                  omit <phase> from a full ingest: junk, subtitles, ocr,
+                  roles, commentary, chapters, plex, tagging and split,
+                  comma-separated; a bare -o omits all nine.
+    -O, --only <phases>
+                  do only these phases, each on its own, over the whole tree
+                  below each folder given, in the order typed and stopping at
+                  the first that fails: layout, roles, ocr, tagging,
+                  subtitles, commentary, names, chapters, extras-chapters,
+                  split, plex and backups, comma-separated. Cannot be
+                  combined with -r, -k or -o.
+    -A, --ai      let language models help (docs/models.md): in a full ingest
+                  also chapter the extras that have no chapters and split
+                  the files holding several episodes, and in any run let the
+                  track, commentary, subtitle and extras steps ask a model.
+                  Without -A none is asked, and -O extras-chapters and -O
+                  split are refused.
+    -P, --prompt <text>
+                  with -A or -O extras-chapters: more instructions for the
+                  model, added to every request.
+    -w, --write   with -O tagging, subtitles, names or backups: carry out what
+                  their dry run only prints. On its own it is refused.
+    -i, --ids <file>
+                  with -O tagging: the unmatched list, filled in with ids, read
+                  back - a TMDb number, tvdb-<number> or an IMDb id. A dry
+                  run unless -w is given.
+    -v, --verbose Also say why each item was handled the way it was, and on a
+                  failure print the tool's whole output rather than its last
+                  lines.
+    -q, --quiet   Print errors only - no progress and no warnings.
+    -x, --set <name=value>
+                  Override a setting for this run, over the settings file;
+                  repeatable. A secret is refused - the settings file is where
+                  it goes. The settings page lists the names.
+
+    Phases
+    ------
+    A full ingest runs all but backups (and extras-chapters and split
+    without -A), and remuxes each episode once into an improved copy,
+    keeping the original as "<name> - old.mkv". -O runs them one at a time.
+    junk             deletes release junk (movieJunkExtensions) and samples
+    layout           remuxes into Matroska, sorts the episodes into Season
+                     folders, the specials into Season 00 and the extras into
+                     the folders the servers read
+    roles            puts the subtitles' forced and SDH flags right
+    ocr              reads picture subtitles into text (seconv)
+    tagging          names each show from TMDb, or TheTVDB (tmdbApiKey,
+                     tvdbApiKey), and each episode after its title
+    subtitles        downloads, syncs and tests the subtitles spokenLanguages
+                     names
+    commentary       finds and transcribes the commentary tracks (whisper)
+    names            names numbered commentaries after who introduces
+                     themselves in them (-A)
+    chapters         gives the episodes their disc's chapters from ChapterDB
+    extras-chapters  chapters the extras by the language model (-A)
+    split            cuts a file holding several episodes into one per
+                     episode, where the model confirms the seam (-A)
+    plex             compares each episode with the media server's copy,
+                     and carries over what it lacks
+    backups          drops the (old) originals whose copies pass the checks
+
+    Dependencies
+    ------------
+    Required: ffmpeg, mkvtoolnix, mediainfo. The optional tools, and what a
+    run does without each, are in docs/requirements.md.
+
+    Everything else: docs/commands/ingest-series.md
+
+Nothing was changed.

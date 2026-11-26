@@ -42,6 +42,7 @@ from medialib.lib import (
     cleannamesindividually,
     clioptions,
     enums,
+    episodes,
     overwrite,
     prefixes,
     runlog,
@@ -72,25 +73,13 @@ OPT_LONG = "h:help"
 LOGS = "find-gaps"
 REPORT = os.path.join(LOGS, "find-gaps-%s.tree")
 
-# A season and episode anywhere in a name: "S01E02", "s1e2", "S02,E13",
-# "S01 E02", and the episodes after it of a file holding more than one -
-# "S01E01E02", "S01E01-E03". Not inside a word: "bs01e02" is not an episode.
-_EPISODE = re.compile(
-    r"(?<![A-Za-z0-9])[Ss]([0-9]{1,3})[ ._,-]*[Ee]([0-9]{1,4})"
-    r"((?:[ ._]*-?[ ._]*[Ee][0-9]{1,4})*)(?![0-9])")
-_MORE_EPISODES = re.compile(r"(-?)[ ._]*[Ee]([0-9]{1,4})")
-# And the other spelling of the same: "1x05".
-_CROSS_EPISODE = re.compile(r"(?<![A-Za-z0-9])([0-9]{1,2})[xX]([0-9]{2,3})(?![0-9])")
-
-# A folder that is one season of a show.
-_SEASON_FOLDER = re.compile(
-    r"^(?:season|series|staffel|saison|seizoen|temporada|stagione|s)"
-    r"[ ._-]*([0-9]{1,3})(?![0-9])", re.IGNORECASE)
-# A folder whose name says which season it holds, anywhere in it: "Season 2",
-# "Show S02 1080p". Not inside a word: "Jobs 2" names no season.
-_NAMES_SEASON = re.compile(
-    r"(?<![A-Za-z0-9])(?:season|series|staffel|saison|seizoen|temporada|"
-    r"stagione|s)[ ._-]*[0-9]{1,3}(?![0-9])", re.IGNORECASE)
+# The episode and season readings are the shared ones (medialib/lib/episodes.py),
+# which ingest-series reads names by too.
+_EPISODE = episodes.EPISODE
+_MORE_EPISODES = episodes.MORE_EPISODES
+_CROSS_EPISODE = episodes.CROSS_EPISODE
+_SEASON_FOLDER = episodes.SEASON_FOLDER
+_NAMES_SEASON = episodes.NAMES_SEASON
 
 # A leading date, compact or separated. The separated shape is the one
 # `clean-folder-structure -d` normalises, so a tree it has not been run over yet
@@ -169,26 +158,7 @@ def _run_files(files: list[str]) -> list[str]:
     return [files[i] for i in prefixes.plurality_kind_indices(files)]
 
 
-def episodes_of(name: str) -> list[tuple[int, int]]:
-    """Every (season, episode) a name says it holds, in order."""
-    match = _EPISODE.search(name)
-    if match:
-        season, first = int(match.group(1)), int(match.group(2))
-        found = [(season, first)]
-        previous = first
-        for more in _MORE_EPISODES.finditer(match.group(3)):
-            number = int(more.group(2))
-            # A dash between two episodes is a range: E01-E03 is three.
-            if more.group(1) and number > previous:
-                found += [(season, n) for n in range(previous + 1, number + 1)]
-            else:
-                found.append((season, number))
-            previous = number
-        return found
-    match = _CROSS_EPISODE.search(name)
-    if match:
-        return [(int(match.group(1)), int(match.group(2)))]
-    return []
+episodes_of = episodes.episodes_of
 
 
 def date_of(name: str) -> datetime.date | None:

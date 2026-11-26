@@ -28,7 +28,7 @@ dependencies = ["mutagen", "pycountry"]
 [project.optional-dependencies]
 test = ["pytest", "pytest-xdist"]
 
-# The twenty-two commands. medialib/commands.py holds the same mapping for the
+# The twenty-three commands. medialib/commands.py holds the same mapping for the
 # other two things that need it - the name a help page prints, and how one
 # command starts another - and tests/test_commands.py fails if the two ever
 # disagree.
@@ -51,6 +51,7 @@ generate-chapters = "medialib.cli.generate_chapters:cli"
 ingest-books = "medialib.cli.ingest_books:cli"
 ingest-movies = "medialib.cli.ingest_movies_run:cli"
 ingest-music = "medialib.cli.ingest_music:cli"
+ingest-series = "medialib.cli.ingest_series_run:cli"
 plex-letterboxd-sync = "medialib.cli.plex_letterboxd_sync:cli"
 read-library = "medialib.cli.read_library:cli"
 transcribe-audio = "medialib.cli.transcribe_audio:cli"
