@@ -164,26 +164,32 @@ def _reason_for(movie: str, named: set) -> str:
                         transfer)
 
 
-def remuxes_in(root: str, named: set, log) -> list:
+def remuxes_in(root: str, named: set, log, films=None,
+               converted=None) -> list:
     """(film, where its converted copy goes, why it is a remux) for every
     film under ``root`` that is a remux. Each part of a split film is a film
     of its own here, and its copy keeps the stacking token last, so the
-    copies stack as the parts do."""
+    copies stack as the parts do.
+
+    ``films`` and ``converted`` are another command's walker and copy name
+    (ingest-series': the episodes, and the version an episode's copy is
+    written as)."""
     found = []
-    for movie in plexphase.films(root):
+    for movie in (films or plexphase.films)(root):
         directory, name = os.path.split(movie)
         stem = os.path.splitext(name)[0]
         reason = _reason_for(movie, named)
         if not reason:
             continue
         target = os.path.join(directory,
-                              plexnames.converted_stem(stem) + ".mkv")
+                              (converted or plexnames.converted_stem)(stem)
+                              + ".mkv")
         found.append((movie, target, reason))
     return found
 
 
 def convert_remuxes(root: str, named: set, ram_root: str, script_dir: str,
-                    log) -> int:
+                    log, films=None, converted=None) -> int:
     """Every remux under ``root`` converted by ONE convert-video run, its copy
     written beside it. convert-video's own status, 0 when there was nothing to
     convert.
@@ -195,7 +201,7 @@ def convert_remuxes(root: str, named: set, ram_root: str, script_dir: str,
     as long as its film is convert-video's to skip, so a rerun converts only
     what an earlier one did not finish.
     """
-    remuxes = remuxes_in(root, named, log)
+    remuxes = remuxes_in(root, named, log, films, converted)
     if not remuxes:
         log("  No remux to convert")
         return 0
@@ -224,17 +230,24 @@ def convert_remuxes(root: str, named: set, ram_root: str, script_dir: str,
 
 # --- the (old) backups the drop-backups sweep is asked about ------------------
 
-def drop_candidates(roots: list) -> list:
+def drop_candidates(roots: list, items=None) -> list:
     """``(movie, old)`` for every film under the roots that has the ``(old)``
     copy its improved original was kept beside, in walk order - the films the
     drop-backups sweep is asked about.
 
     Walked the way the improve phase walks: one film per folder, and the film
     is the file the tagging left living while its original was kept to one
-    side.
+    side. ``items``, when given, is the walker that answers the files under a
+    root instead (ingest-series' episodes).
     """
     pairs = []
     for root in roots:
+        if items is not None:
+            for movie in items(root):
+                old = kept_original(movie)
+                if old:
+                    pairs.append((movie, old))
+            continue
         for directory in [root] + rules._folders_below(root):
             if rules.is_bonus_folder(directory):
                 continue

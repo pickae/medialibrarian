@@ -23,8 +23,8 @@ from medialib.lib import clioptions
 from medialib.lib.enums import shell_lower
 from medialib.lib.filmmatch import Film
 
-__all__ = ["MediaServerError", "Movie", "Copy", "Wanted", "Library",
-           "Capabilities", "Naming", "Provider", "MediaServer", "PROVIDERS",
+__all__ = ["MediaServerError", "Movie", "Copy", "EpisodeCopy", "Wanted", "Library",
+           "Capabilities", "Naming", "SeriesNaming", "Provider", "MediaServer", "PROVIDERS",
            "DEFAULT", "naming", "provider", "updated"]
 
 
@@ -52,6 +52,20 @@ class Copy(NamedTuple):
     film: Film
     section: str
     edition: str
+    files: tuple
+
+
+class EpisodeCopy(NamedTuple):
+    """One version of one episode in a show library: the server's key for
+    it, the show's catalogue ids ({"imdb": ..., "tmdb": ..., "tvdb": ...}),
+    the season and episode, the library, and the files it is kept in."""
+
+    key: str
+    show_ids: dict
+    show_title: str
+    season: int
+    episode: int
+    section: str
     files: tuple
 
 
@@ -94,12 +108,36 @@ class Naming(NamedTuple):
 
     ``imdb`` and ``tmdb`` are the id tag, with ``%s`` for the number.
     ``edition`` is ``"tag"`` - ``{edition-Name}`` - or ``"label"``, a
-    `` - Name`` after the whole name.
+    `` - Name`` after the whole name. ``tvdb`` is the tag a series named
+    from TheTVDB carries; films never do.
     """
 
     imdb: str
     tmdb: str
     edition: str
+    tvdb: str = "{tvdb-%s}"
+
+
+class SeriesNaming(NamedTuple):
+    """How a server's scanner wants a show's episodes named on disk.
+
+    ``token`` is the case the season-and-episode token is written in:
+    ``"plex"`` - ``s01e02`` - or ``"jellyfin"`` - ``S01E02``. ``before`` is
+    what stands between the series and the token, ``after`` between the
+    token and the episode's title. ``version`` is how a second copy of one
+    episode - the converted one - is told apart: ``"bracket"`` writes
+    `` [AV1]``, which Plex ignores and merges as a version; ``"label"``
+    writes `` - AV1``, Jellyfin's version label.
+
+    Jellyfin reads anything after a `` - `` as a version label, so its
+    episode title is set off by a space alone: with a hyphen, two copies of
+    one episode would read as two versions labelled with its title.
+    """
+
+    token: str = "plex"
+    before: str = " - "
+    after: str = " - "
+    version: str = "bracket"
 
 
 class Provider(NamedTuple):
@@ -113,6 +151,7 @@ class Provider(NamedTuple):
     # The settings it is reached with, the secret among them last - said
     # where a run cannot reach it.
     settings: tuple
+    series: SeriesNaming = SeriesNaming()
 
     def client(self):
         return importlib.import_module(self.module)
@@ -144,6 +183,9 @@ class MediaServer(Protocol):
 
     def copies(self) -> list[Copy]: ...
 
+    # Every episode version in the show libraries (ingest-series' plex phase).
+    def episode_copies(self) -> list[EpisodeCopy]: ...
+
     # Says the day the server now has the film played on, where marking it
     # leaves one the next read would take for a day it was watched - "" where
     # it leaves none.
@@ -168,10 +210,11 @@ PROVIDERS: dict[str, Provider] = {
         ("plexUrl", "plexToken")),
     "jellyfin": Provider(
         "jellyfin", "Jellyfin", "medialib.lib.jellyfinserver",
-        Naming("[imdbid-%s]", "[tmdbid-%s]", "label"),
+        Naming("[imdbid-%s]", "[tmdbid-%s]", "label", "[tvdbid-%s]"),
         Capabilities(play_history=False, dated_marks=True, watchlist=False,
                      rating_in_ui=False),
-        ("jellyfinUrl", "jellyfinUser", "jellyfinApiKey")),
+        ("jellyfinUrl", "jellyfinUser", "jellyfinApiKey"),
+        SeriesNaming("jellyfin", " ", " ", "label")),
 }
 
 DEFAULT = "plex"

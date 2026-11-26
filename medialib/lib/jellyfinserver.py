@@ -182,6 +182,45 @@ class Server:
                                       _edition(source, path), tuple(files)))
         return found
 
+    def show_sections(self) -> list[tuple[str, str]]:
+        """Every show library the user sees, as (id, name)."""
+        answer = self._ask("/UserViews", (("userId", self.user_id()),)) or {}
+        return [(str(view.get("Id", "")), str(view.get("Name", "")))
+                for view in answer.get("Items", ())
+                if view.get("CollectionType") == "tvshows"]
+
+    def episode_copies(self) -> list[mediaserver.EpisodeCopy]:
+        """Every version of every episode in the show libraries: the series
+        read once for their provider ids, then the episodes with their
+        season, number and files."""
+        found: list[mediaserver.EpisodeCopy] = []
+        for key, title in self.show_sections():
+            shows: dict = {}
+            answer = self._ask("/Items", (
+                ("userId", self.user_id()), ("ParentId", key),
+                ("Recursive", "true"), ("IncludeItemTypes", "Series"),
+                ("Fields", "ProviderIds"))) or {}
+            for item in answer.get("Items", ()):
+                ids = {str(name).lower(): str(value) for name, value
+                       in (item.get("ProviderIds") or {}).items() if value}
+                shows[str(item.get("Id", ""))] = (ids, str(item.get("Name", "")))
+            answer = self._ask("/Items", (
+                ("userId", self.user_id()), ("ParentId", key),
+                ("Recursive", "true"), ("IncludeItemTypes", "Episode"),
+                ("Fields", "Path,MediaSources"))) or {}
+            for item in answer.get("Items", ()):
+                season, episode = item.get("ParentIndexNumber"), \
+                    item.get("IndexNumber")
+                if not isinstance(season, int) or not isinstance(episode, int):
+                    continue
+                ids, show_title = shows.get(str(item.get("SeriesId", "")),
+                                            ({}, str(item.get("SeriesName", ""))))
+                for source in item.get("MediaSources") or ():
+                    found.append(mediaserver.EpisodeCopy(
+                        str(item.get("Id", "")), ids, show_title, season,
+                        episode, title, (str(source.get("Path", "")),)))
+        return found
+
     def _parts(self, key: str) -> list[str]:
         """The files after the first of a film split into parts."""
         answer = self._ask("/Videos/%s/AdditionalParts" % key,

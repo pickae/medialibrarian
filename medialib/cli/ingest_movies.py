@@ -53,6 +53,7 @@ from medialib.lib import (
     subtitleocr,
     subtitletracks,
     toolcapture,
+    treewalk,
 )
 from medialib.lib.runlog import log
 
@@ -798,7 +799,8 @@ def cleanup(root: str) -> None:
     it."""
     junk = tuple(enums.shell_lower(part) for part in os.environ.get(
         "movieJunkExtensions", " ".join(JUNK_EXTENSIONS)).split())
-    for parent, _dirs, names in os.walk(root):
+    for parent, dirs, names in os.walk(root):
+        _prune_held_out(parent, dirs)
         for name in names:
             path = os.path.join(parent, name)
             extension = enums.lower_extension_of(name) if "." in name else ""
@@ -2235,9 +2237,17 @@ def _names_in(directory: str) -> list:
         return []
 
 
+def _prune_held_out(parent: str, dirs: list) -> None:
+    """An os.walk's next folders, less the ones the run holds out (the shows
+    ingest-series is for, see :func:`treewalk.holding_out`)."""
+    dirs[:] = [name for name in dirs
+               if not treewalk.is_held_out(os.path.join(parent, name))]
+
+
 def _folders_below(root: str, min_depth: int = 1) -> list:
     found = []
     for parent, dirs, _names in os.walk(root):
+        _prune_held_out(parent, dirs)
         dirs.sort()
         for name in dirs:
             path = os.path.join(parent, name)
@@ -2250,6 +2260,7 @@ def _folders_below(root: str, min_depth: int = 1) -> list:
 def _files_below(root: str, matches=None, min_depth: int = 1) -> list:
     found = []
     for parent, dirs, names in os.walk(root):
+        _prune_held_out(parent, dirs)
         dirs.sort()
         for name in sorted(names):
             path = os.path.join(parent, name)
@@ -2267,7 +2278,7 @@ def _movies_one_level_down(root: str) -> list:
     found = []
     for name in sorted(_names_in(root)):
         folder = os.path.join(root, name)
-        if not os.path.isdir(folder):
+        if not os.path.isdir(folder) or treewalk.is_held_out(folder):
             continue
         for entry in sorted(_names_in(folder)):
             path = os.path.join(folder, entry)

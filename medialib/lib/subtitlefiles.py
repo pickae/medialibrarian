@@ -28,6 +28,7 @@ from medialib import helpers
 from medialib.lib import (
     diskturn,
     donelog,
+    episodes,
     languages,
     plexnames,
     runlog,
@@ -512,13 +513,44 @@ def film_imdb_id(file: str) -> str:
     Read off the file's own name first and its folder's after it, since the
     tagging names both. A TMDb tag is looked up for the IMDb id it stands for,
     which is the only id OpenSubtitles is searched by.
+
+    An episode - a file with an episode token in a season folder - is known
+    by its SERIES' IMDb id and its season and episode, written
+    ``tt0000001:S01E02`` (:func:`episode_imdb_id`): the form the helper
+    searches an episode by.
     """
+    episode = episode_imdb_id(file)
+    if episode:
+        return episode
     for name in (os.path.basename(file),
                  os.path.basename(os.path.dirname(os.path.abspath(file)))):
         imdb = imdb_of_name(name)
         if imdb:
             return imdb
     return ""
+
+
+def episode_imdb_id(file: str) -> str:
+    """``tt0000001:S01E02`` for an episode whose series folder carries an
+    id: the series' IMDb id (a TMDb or TheTVDB tag looked up for it), the
+    season and the first episode. "" for anything else."""
+    folder = os.path.dirname(os.path.abspath(file))
+    if episodes.season_of_folder(os.path.basename(folder)) is None:
+        return ""
+    found = episodes.episodes_of(os.path.basename(file))
+    if not found:
+        return ""
+    provider, number = plexnames.id_of(os.path.basename(
+        os.path.dirname(folder)))
+    imdb = ""
+    if provider == "imdb":
+        imdb = number.lower()
+    elif provider in ("tmdb", "tvdb"):
+        from medialib.lib import seriesidentify
+        imdb = seriesidentify.imdb_of(provider, number).lower()
+    if not imdb:
+        return ""
+    return "%s:S%02dE%02d" % (imdb, found[0][0], found[0][1])
 
 
 def imdb_of_name(name: str) -> str:

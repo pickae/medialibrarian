@@ -12,7 +12,7 @@ import os
 import re
 from collections.abc import Callable
 
-from medialib.lib import plexnames, safety
+from medialib.lib import plexnames, safety, seriesfolders
 
 # A movie folder is "Title (Year)" where the Year is 1xxx or 2xxx. The greedy
 # title takes everything up to the LAST "(Year)", so "Nighthawk (1999) (2005)"
@@ -186,7 +186,12 @@ def is_film_folder(entry) -> bool:
     A folder that says no year at all is a film too, where the disk says so
     the same way and the film in it is named for the folder - see
     :func:`read_undated_folder`.
+
+    A show is never a film, whatever its name: "Show (2005)" holding season
+    folders or episodes is ingest-series' (:func:`seriesfolders.looks_like_series`).
     """
+    if seriesfolders.looks_like_series(entry.path):
+        return False
     base, _tag, _title, _year, edition = read_folder(entry.name)
     if not base:
         return bool(read_undated_folder(entry)[0])
@@ -300,6 +305,10 @@ def _film_folders(directory: str) -> list:
         return found
     for entry in entries:
         if not entry.is_dir(follow_symlinks=False):
+            continue
+        # A show is neither a film nor a shelf of them: its seasons are not
+        # walked into for films.
+        if seriesfolders.looks_like_series(entry.path):
             continue
         if is_film_folder(entry):
             found.append(entry)
