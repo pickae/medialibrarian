@@ -63,6 +63,7 @@ embedart:
 # aacgain, which skip every FLAC - and the library is FLAC.
 replaygain:
     backend: ffmpeg
+    r128_targetlevel: 89
 
 match:
     strong_rec_thresh: 0.10
