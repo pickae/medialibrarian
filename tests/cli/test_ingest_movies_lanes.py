@@ -491,6 +491,26 @@ class TestTheRemuxAsksForTheFilmsLanguages:
             == run_module.tmdbidentify.FilmLanguages()
         assert asked == []
 
+    def test_the_tag_refresh_does_not_wait_for_the_tagging(self,
+                                                           monkeypatch):
+        """It takes the id the name carries, or the dry run's answer only
+        once that is in: the original flags are the remux's to set until
+        then."""
+        def waits(movie):
+            raise AssertionError("waited for the dry run")
+        state, asked, _answer = self._state(monkeypatch, waits)
+        state.film_tags.known_tag_of = lambda movie: ""
+        assert state.known_original_language("/f/F/F.mkv") == ""
+        assert state.known_original_language(
+            "/f/F {tmdb-9}/F {tmdb-9}.mkv") == "ja"
+        state.film_tags.known_tag_of = lambda movie: "{tmdb-9}"
+        assert state.known_original_language("/f/F/F.mkv") == "ja"
+        assert asked == ["{tmdb-9}", "{tmdb-9}"]
+
+    def test_a_dry_run_still_going_knows_no_tag(self, tmp_path):
+        tags = lanes.FilmTags(str(tmp_path))
+        assert tags.known_tag_of(str(tmp_path / "F" / "F.mkv")) == ""
+
     def test_a_failed_asking_keeps_the_old_rule(self, monkeypatch):
         def broken(movie):
             raise RuntimeError("no network")

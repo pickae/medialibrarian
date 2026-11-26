@@ -84,6 +84,11 @@ def remux(tmp_path, monkeypatch, request):
               for id, kind, codec, channels, language, name, commentary,
               default in FIXTURE]
     monkeypatch.setattr(rules, "_identify", lambda path: tracks)
+    if param.get("original"):
+        monkeypatch.setattr(
+            run_module.Run, "film_languages",
+            lambda self, path: run_module.tmdbidentify.FilmLanguages(
+                param["original"], ()))
     # An empty fixture movie: mediainfo reports no JOC metadata, so an object
     # flag can only come from the track NAME - the last-resort path.
     monkeypatch.setattr(rules, "_object_flags",
@@ -321,6 +326,52 @@ class TestTheCommentaryTranscripts:
                 "Film (2020) 8 Commentary Dutch.nl.srt") in err
         assert ("  Appending the commentary transcript: Commentary Dutch (EN), "
                 "Film (2020) 8 Commentary Dutch.en.srt") in err
+
+
+def _original_flags(argv):
+    """Every ``--original-flag`` the remux was given, in order, with the
+    input file each one applies to."""
+    flags, pending = [], []
+    for at, one in enumerate(argv):
+        if one == "--original-flag":
+            pending.append(argv[at + 1])
+        elif os.path.isabs(one):
+            flags += [(os.path.basename(one), value) for value in pending]
+            pending = []
+    return flags
+
+
+class TestTheOriginalFlag:
+    """With the film's original language known - English here, which the
+    fixture has a soundtrack in - each audio and subtitle track has its
+    original flag set or cleared; without it the remux says nothing of it."""
+
+    ENGLISH = {"original": "en", "sidecars": (".en.forced.srt",)}
+
+    @pytest.mark.parametrize("remux", [ENGLISH], indirect=True)
+    def test_the_film_s_own_tracks_are_set_or_cleared(self, remux):
+        """Track 1 is an English soundtrack, 6 the English subtitle and 10
+        the Atmos soundtrack; 7 and 8 are commentaries, 9 the score and 11
+        a commentary subtitle."""
+        film = [value for name, value in _original_flags(remux["argv"])
+                if name == "Film (2020).mkv"]
+        assert film == ["1:1", "6:1", "7:0", "8:0", "9:0", "10:1", "11:0"]
+
+    @pytest.mark.parametrize("remux", [ENGLISH], indirect=True)
+    def test_the_swapped_soundtrack_keeps_it(self, remux):
+        assert (os.path.basename(remux["opus"]), "0:1") \
+            in _original_flags(remux["argv"])
+
+    @pytest.mark.parametrize("remux", [ENGLISH], indirect=True)
+    def test_a_forced_sidecar_and_the_transcripts_are_not_the_original(
+            self, remux):
+        flags = dict(_original_flags(remux["argv"]))
+        assert flags["Film (2020).en.forced.srt"] == "0:0"
+        assert flags["Film (2020) 8 Commentary Dutch.en.srt"] == "0:0"
+        assert flags["Film (2020) 8 Commentary Dutch.nl.srt"] == "0:0"
+
+    def test_unknown_it_is_not_given_at_all(self, remux):
+        assert "--original-flag" not in remux["argv"]
 
 
 class TestTheDownloadedSubtitles:
