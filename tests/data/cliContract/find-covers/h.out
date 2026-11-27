@@ -13,6 +13,11 @@ Options:
                     Also look for a file whose folder holds a cover image
                     (folder.jpg, cover.png, an image sharing its name, ...),
                     rather than taking that image as its cover.
+    -m, --min-megapixels <megapixels>
+                    A cover smaller than this - embedded, or the image
+                    beside the file - is looked to be replaced, and only by
+                    one with more pixels. A fraction is allowed; 0 keeps
+                    every cover. Default 0.25
     -n, --dry-run   Only list the files that would be looked for; nothing is
                     searched or written.
     -A, --ai        Let language models help (docs/models.md). Without -A no

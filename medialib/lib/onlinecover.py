@@ -951,6 +951,35 @@ def has_embedded_cover(path: str) -> bool:
     return "video" in kinds or "attachment" in kinds
 
 
+def embedded_cover_size(path: str) -> tuple[int, int]:
+    """The width and height of the largest picture ``path`` carries as an
+    attached-picture stream, or (0, 0) when it carries none or ffprobe cannot
+    tell - a Matroska attachment among them."""
+    try:
+        done = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL)
+    except OSError:
+        return 0, 0
+    return largest_size(done.stdout.decode("utf-8", "replace"))
+
+
+def largest_size(text: str) -> tuple[int, int]:
+    """The (width, height) with the most pixels among lines of "W,H" or
+    "W H", or (0, 0) when no line is one."""
+    best = (0, 0)
+    for line in text.splitlines():
+        words = line.replace(",", " ").split()
+        if len(words) < 2 or not (words[0].isdigit() and words[1].isdigit()):
+            continue
+        size = (int(words[0]), int(words[1]))
+        if size[0] * size[1] > best[0] * best[1]:
+            best = size
+    return best
+
+
 def media_seconds(path: str) -> float:
     try:
         done = subprocess.run(

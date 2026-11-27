@@ -1,7 +1,8 @@
 # `find-covers`
 
-Looks online for a cover for every audio file in a tree that has none, and
-writes what it finds into **copies** in a separate output tree. The input is
+Looks online for a cover for every audio file in a tree that has none, or only
+a small one, and writes what it finds into **copies** in a separate output
+tree. The input is
 only read, so the results can be checked before anything is moved back.
 
     find-covers [options] <inputDir> <outputDir>
@@ -16,7 +17,8 @@ only read, so the results can be checked before anything is moved back.
 
 ## Which files are looked for
 
-Every audio file is looked at, except:
+Every audio file is looked at, except (a cover too small to count aside, see
+[below](#small-covers)):
 
 - one in a format that cannot carry a cover (only Opus, Ogg, FLAC, MP3 and
   MP4 — `.m4a`, `.m4b` — can);
@@ -28,6 +30,19 @@ Every audio file is looked at, except:
   counts, not the folders above it.
 
 With `-i`, those images are ignored and such a file is looked for as well.
+
+### Small covers
+
+A cover under **0.25 megapixels** (smaller than 500×500) does not count:
+whether it is embedded or the image beside the file, the file is looked for
+anyway, to replace it. What is found is embedded only when it has more pixels
+than the cover the file has; otherwise nothing is written for that file, and
+the run lists it under the files nothing larger was found for. A cover whose
+size cannot be read is kept.
+
+`-m <megapixels>` moves the threshold — `-m 1` looks past anything under
+1000×1000, `-m 0.09` only past covers under 300×300 — and `-m 0` keeps every
+cover, whatever its size.
 
 Unlike [`convert-audio`](convert-audio.md#cover-art), there is no rule that
 leaves album tracks out: every file without a cover is looked for, since

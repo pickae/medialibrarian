@@ -212,6 +212,15 @@ class TestTheValueChecks:
         with pytest.raises(cli.UsageError):
             cli.validate("j", "-0", self.tables("j | nonNegInt | "))
 
+    @pytest.mark.parametrize("value", ["0", "0.0", "0.25", "3"])
+    def test_nonnegnum_takes_zero_and_fractions(self, value):
+        cli.validate("m", value, self.tables("m | nonNegNum | threshold"))
+
+    @pytest.mark.parametrize("value", ["-0.5", ".5", "1.", "abc", ""])
+    def test_nonnegnum_refuses_the_rest(self, value):
+        with pytest.raises(cli.UsageError):
+            cli.validate("m", value, self.tables("m | nonNegNum | threshold"))
+
     @pytest.mark.parametrize("value", ["07", "007", "", " ", "+7"])
     def test_a_whole_number_is_the_one_somebody_typed_on_purpose(self, value):
         """A padded number is a spelling the shell would read as octal, and an

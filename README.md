@@ -30,7 +30,7 @@ apply to it.
 | [`convert-audio`](docs/commands/convert-audio.md) | Spoken-word audio → low-bitrate Opus, AAC or xHE-AAC |
 | [`convert-and-concat`](docs/commands/convert-and-concat.md) | The two above chained, intermediate tree in RAM |
 | [`transcribe-audio`](docs/commands/transcribe-audio.md) | Audio and video → whisper transcripts in a mirrored folder |
-| [`find-covers`](docs/commands/find-covers.md) | Covers looked for online for audio files that lack one, embedded in copies |
+| [`find-covers`](docs/commands/find-covers.md) | Covers looked for online for audio files that lack one or carry a small one, embedded in copies |
 | [`generate-chapters`](docs/commands/generate-chapters.md) | Chapter marks and titles for spoken word, by a language model reading its transcript |
 | [`ingest-music`](docs/commands/ingest-music.md) | Downloads → clean lossless FLAC library |
 | [`ytdlp`](docs/commands/ytdlp.md) | Download tables of podcast feeds as audio or video, Windows or Linux |

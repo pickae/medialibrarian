@@ -23,10 +23,14 @@ def _touch(root, *paths, data=b"x"):
         target.write_bytes(data)
 
 
-def _run(tmp_path):
+def _run(tmp_path, min_pixels=0):
     (tmp_path / "out").mkdir(exist_ok=True)
     return find_covers.Run(str(tmp_path / "in"), str(tmp_path / "out"),
-                           str(tmp_path), str(tmp_path / "meter"), "1920x1080>")
+                           str(tmp_path), str(tmp_path / "meter"), "1920x1080>",
+                           min_pixels=min_pixels)
+
+
+QUARTER_MP = 250_000
 
 
 @pytest.fixture
@@ -102,6 +106,86 @@ class TestWanted:
         assert run.tally.cannot_carry == 1
 
 
+class TestSmallCovers:
+    @pytest.fixture
+    def sizes(self, monkeypatch):
+        """The size each image (by file name) and each file's embedded cover
+        (by its path) is read as; anything not named reads as unknown."""
+        table = {}
+        monkeypatch.setattr(find_covers, "image_size",
+                            lambda path: table.get(os.path.basename(path),
+                                                   (0, 0)))
+        monkeypatch.setattr(onlinecover, "embedded_cover_size",
+                            lambda path: table.get(os.path.basename(path),
+                                                   (0, 0)))
+        return table
+
+    @pytest.fixture
+    def embedded(self, monkeypatch):
+        monkeypatch.setattr(onlinecover, "has_embedded_cover",
+                            lambda _path: True)
+
+    def test_a_small_embedded_cover_is_looked_past(self, tmp_path, embedded,
+                                                   sizes):
+        sizes["track.mp3"] = (300, 300)
+        _touch(tmp_path, "in/track.mp3")
+        run = _run(tmp_path, QUARTER_MP)
+        assert run.wanted("track.mp3", False)
+        assert run.replacing == {"track.mp3": (300, 300)}
+        assert run.label("track.mp3") == "track.mp3 (its cover is 300x300)"
+
+    @pytest.mark.parametrize("size", [(500, 500), (0, 0)])
+    def test_one_at_the_threshold_or_unreadable_is_kept(self, tmp_path,
+                                                        embedded, sizes, size):
+        sizes["track.mp3"] = size
+        _touch(tmp_path, "in/track.mp3")
+        run = _run(tmp_path, QUARTER_MP)
+        assert not run.wanted("track.mp3", False)
+        assert run.tally.own_cover == 1
+
+    def test_a_threshold_of_zero_keeps_every_cover(self, tmp_path, embedded,
+                                                   sizes):
+        sizes["track.mp3"] = (10, 10)
+        _touch(tmp_path, "in/track.mp3")
+        assert not _run(tmp_path, 0).wanted("track.mp3", False)
+
+    def test_a_small_folder_cover_is_looked_past(self, tmp_path, no_embedded,
+                                                 sizes):
+        sizes["folder.jpg"] = (200, 200)
+        _touch(tmp_path, "in/a/track.mp3", "in/a/folder.jpg")
+        run = _run(tmp_path, QUARTER_MP)
+        relative = os.path.join("a", "track.mp3")
+        assert run.wanted(relative, False)
+        assert run.tally.folder_cover == 0
+        assert run.replacing == {relative: (200, 200)}
+
+    def test_a_large_embedded_cover_keeps_a_small_folder_one(
+            self, tmp_path, embedded, sizes):
+        sizes["folder.jpg"] = (200, 200)
+        sizes["track.mp3"] = (1000, 1000)
+        _touch(tmp_path, "in/a/track.mp3", "in/a/folder.jpg")
+        run = _run(tmp_path, QUARTER_MP)
+        assert not run.wanted(os.path.join("a", "track.mp3"), False)
+        assert run.tally.own_cover == 1
+
+    def test_the_larger_of_two_small_covers_is_the_one_to_beat(
+            self, tmp_path, embedded, sizes):
+        sizes["folder.jpg"] = (200, 200)
+        sizes["track.mp3"] = (400, 400)
+        _touch(tmp_path, "in/a/track.mp3", "in/a/folder.jpg")
+        run = _run(tmp_path, QUARTER_MP)
+        relative = os.path.join("a", "track.mp3")
+        assert run.wanted(relative, False)
+        assert run.replacing == {relative: (400, 400)}
+
+
+def test_the_largest_size_among_lines_is_taken():
+    assert onlinecover.largest_size("300,300\n\n1200,1200\n600,600\n") \
+        == (1200, 1200)
+    assert onlinecover.largest_size("500 400\n") == (500, 400)
+    assert onlinecover.largest_size("N/A,N/A\n") == (0, 0)
+
+
 class TestFound:
     @pytest.fixture
     def found(self, tmp_path, monkeypatch):
@@ -171,6 +255,23 @@ class TestFound:
         run = self._find(tmp_path, os.path.join("a", "01.mp3"))
         assert run.tally.unembedded == [os.path.join("a", "01.mp3")]
         assert os.listdir(tmp_path / "out/a") == []
+
+    @pytest.mark.parametrize("found_size,written", [
+        ((1000, 1000), True), ((300, 300), False), ((0, 0), False)])
+    def test_a_small_cover_is_replaced_only_by_a_larger_one(
+            self, tmp_path, found, monkeypatch, found_size, written):
+        monkeypatch.setattr(find_covers, "image_size", lambda _p: found_size)
+        _touch(tmp_path, "in/a/01.mp3", "in/a/02.mp3", data=b"audio")
+        relative = os.path.join("a", "01.mp3")
+        run = _run(tmp_path, QUARTER_MP)
+        run.replacing[relative] = (300, 300)
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        run._find_in(relative, os.path.join(run.input_dir, relative),
+                     str(scratch))
+        assert (tmp_path / "out/a/01.mp3").exists() == written
+        assert run.tally.embedded == ([relative] if written else [])
+        assert run.tally.no_larger == ([] if written else [relative])
 
     def test_nothing_found_writes_nothing(self, tmp_path, found, monkeypatch):
         monkeypatch.setattr(onlinecover, "track_image", lambda *a, **k: "")
