@@ -511,16 +511,18 @@ class Run:
             stereo = onlinecover.media_channels(paths[0]) >= 2
             return thumbnails.online_book_cover(
                 source, seconds, stereo, os.path.join(scratch, "album"),
-                self.model_meter)
+                self.model_meter, root=self.input_dir)
         seconds = onlinecover.media_seconds(source)
         stereo = onlinecover.media_channels(source) >= 2
         if is_book(source):
             return thumbnails.online_book_cover(
                 os.path.dirname(source), seconds, stereo,
-                os.path.join(scratch, "book"), self.model_meter)
+                os.path.join(scratch, "book"), self.model_meter,
+                root=self.input_dir)
         return onlinecover.track_image(source, seconds, scratch,
                                        stereo=stereo,
-                                       meter_file=self.model_meter)
+                                       meter_file=self.model_meter,
+                                       root=self.input_dir)
 
     def _find_in(self, relative: str, source: str, scratch: str) -> None:
         album = relative in self.albums

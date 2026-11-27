@@ -89,6 +89,14 @@ their own cover search:
 - Any other file is looked for as a track, by its own name and tags, the way
   `convert-audio` looks for one.
 
+Where it lies under `<inputDir>` is a clue as well. Every folder between
+`<inputDir>` and the album or file — `Jazz / Kites / Paper Sky / CD1` — is
+handed to the search: the folders above its own as names that may be its
+artist or author, and the whole path to the language models asked under
+`-A`. An album split into disc folders (`CD1`, `Disc 2`, `Disk 01`) is
+looked for by the folder above the disc, the album's own, with the one above
+that as its artist.
+
 The cover catalogues are asked first. When they find nothing and the run is
 given `-A`, a language model that can search the web is asked, and a model
 that can see pictures judges the images it found (the `cover-search` and

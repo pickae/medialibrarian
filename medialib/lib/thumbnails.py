@@ -310,17 +310,19 @@ def _online_thumbnail(input_path: str, outputs: Sequence[str],
 
 def online_book_cover(input_path: str, seconds: float, stereo: bool,
                       ram_base: str, model_meter: str = "",
-                      cover_meta: dict[str, str] | None = None) -> str:
+                      cover_meta: dict[str, str] | None = None,
+                      root: str = "") -> str:
     """A cover found online for the book in <input_path>, saved beside
     <ram_base>, or "". The catalogues first (:mod:`onlinecover`), then a
     model that can search the web (:mod:`aicover`, only under -A), told
     everything the catalogues were. The tags are read off the folder's audio
-    tracks; <input_path> itself is only read."""
+    tracks; <input_path> itself is only read. <root> is the folder the run
+    was given, whose folders down to <input_path> are clues too."""
     tracks = [path for path in _regular_files(input_path)
               if lower_extension_of(path) in _AUDIO_EXTENSIONS]
     ordered = sorted(tracks, key=version_key)
     subject = onlinecover.book_subject(input_path, ordered, seconds, stereo,
-                                       meter_file=model_meter)
+                                       meter_file=model_meter, root=root)
     image = onlinecover.book_cover(input_path, ordered, seconds,
                                    f"{ram_base}.online", stereo=stereo,
                                    subject=subject)

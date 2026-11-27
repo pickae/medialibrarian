@@ -184,8 +184,11 @@ def prompt(name: str, *, folder_path: str = "",
            seconds: float = 0.0, stereo: bool = False,
            heuristic: tuple[str, str] | None = None,
            list_folder: bool = True,
-           probe: Callable[[str], dict] = onlinecover.probe_tags) -> str:
-    """What the model is told about the recording to classify it."""
+           probe: Callable[[str], dict] = onlinecover.probe_tags,
+           folders: Sequence[str] | None = None) -> str:
+    """What the model is told about the recording to classify it.
+    ``folders`` are the folders below the one the run was given, down to
+    ``folder_path``'s own; None says only the few it sits in."""
     folder_lines: list[str] = []
     if folder_path:
         norm = os.path.normpath(folder_path)
@@ -194,8 +197,13 @@ def prompt(name: str, *, folder_path: str = "",
         parents = parts[-4:-1]
         if folder_name:
             folder_lines.append("Folder name: %s" % folder_name)
-        folder_lines.append("Parent folders (outermost first): %s"
-                            % (" / ".join(parents) or "(none)"))
+        if folders is not None:
+            folder_lines.append(
+                "Where it lies below the folder the run was given, outermost "
+                "first: %s" % (" / ".join(folders) or "(in that folder itself)"))
+        else:
+            folder_lines.append("Parent folders (outermost first): %s"
+                                % (" / ".join(parents) or "(none)"))
         if list_folder and os.path.isdir(folder_path):
             listing = _listing(folder_path)
             if listing:
@@ -270,7 +278,8 @@ def classify(name: str, *, folder_path: str = "",
              list_folder: bool = True,
              classifiers: Sequence[llmclient.Llm] | None = None,
              meter_file: str = "",
-             probe: Callable[[str], dict] = onlinecover.probe_tags
+             probe: Callable[[str], dict] = onlinecover.probe_tags,
+             folders: Sequence[str] | None = None
              ) -> tuple[str, str] | None:
     """Classify the recording via :data:`llmroster.AUDIO_CONTENT`, returning
     ``(content, why)`` when confident about any kind but ``other``, or
@@ -288,7 +297,7 @@ def classify(name: str, *, folder_path: str = "",
     request = prompt(
         name, folder_path=folder_path, tracks=tracks, seconds=seconds,
         stereo=stereo, heuristic=heuristic, list_folder=list_folder,
-        probe=probe)
+        probe=probe, folders=folders)
     tally, spans = modelmeter.Tally(), modelmeter.Spans()
     answer = ""
     used = ""

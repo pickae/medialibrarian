@@ -194,17 +194,20 @@ class TestFound:
         calls = {"status": 0, "track": [], "book": [], "seconds": [],
                  "suffix": ".jpg"}
 
-        def track_image(source, seconds, dest_dir, search=None, **_kw):
+        def track_image(source, seconds, dest_dir, search=None, **kw):
             calls["track"].append(source)
+            calls.setdefault("roots", []).append(kw.get("root"))
             image = os.path.join(dest_dir, "online" + calls["suffix"])
             with open(image, "wb") as handle:
                 handle.write(b"JPEG")
             return image
 
-        def book_cover(folder, seconds, stereo, ram_base, meter="", meta=None):
+        def book_cover(folder, seconds, stereo, ram_base, meter="", meta=None,
+                       root=""):
             calls["book"].append(folder)
             calls["seconds"].append(seconds)
-            return track_image(folder, seconds, os.path.dirname(ram_base))
+            return track_image(folder, seconds, os.path.dirname(ram_base),
+                               root=root)
 
         def embed(track, target, image, cover, *args, **kwargs):
             with open(image, "rb") as src, open(cover, "wb") as out:
@@ -236,6 +239,7 @@ class TestFound:
 
         assert run.tally.embedded == [os.path.join("Show", "01.mp3")]
         assert found["track"] == [str(source)]
+        assert found["roots"] == [str(tmp_path / "in")]
         copy = tmp_path / "out/Show/01.mp3"
         assert copy.read_bytes() == b"audio+cover"
         assert os.stat(copy).st_mtime == 1_000_000_000
@@ -300,8 +304,10 @@ class TestFound:
         run = self._find_album(tmp_path, album, tracks)
 
         assert found["book"] == [str(tmp_path / "in/Artist/Album")]
-        # Looked for as the whole album, by all its tracks' length.
+        # Looked for as the whole album, by all its tracks' length, with the
+        # folders the run was given as clues.
         assert found["seconds"] == [7200.0]
+        assert found["roots"] == [str(tmp_path / "in")]
         assert run.tally.beside == [album]
         assert os.listdir(tmp_path / "out/Artist/Album") == ["folder.jpg"]
         assert (tmp_path / "out/Artist/Album/folder.jpg").read_bytes() \
