@@ -4,22 +4,37 @@ Usage:
     find-covers [options] <inputDir> <outputDir>
 
     inputDir      the tree whose audio files are looked at; only read.
-    outputDir     where a copy of each file a cover was found for is written,
-                  at the same relative path, with the cover embedded. Created
-                  if missing, and refused if it lies inside inputDir.
+    outputDir     where what is found is written, at the same relative path:
+                  a copy of the file with the cover embedded, or the cover as
+                  an image - folder.jpg for an album, one named after the
+                  file under -s. Created if missing, and refused if it lies
+                  inside inputDir.
 Options:
     -h, --help      Print this help page.
     -i, --ignore-folder-covers
-                    Also look for a file whose folder holds a cover image
-                    (folder.jpg, cover.png, an image sharing its name, ...),
-                    rather than taking that image as its cover.
+                    Also look for a file or album whose folder holds a cover
+                    image (folder.jpg, cover.png, an image sharing its name,
+                    ...), rather than taking that image as its cover.
+    -l, --min-length <minutes>
+                    Leave alone a file shorter than this; an album is not
+                    held to it, its tracks are under -t. A fraction is
+                    allowed. Default 0, every length.
     -m, --min-megapixels <megapixels>
                     A cover smaller than this - embedded, or the image
                     beside the file - is looked to be replaced, and only by
                     one with more pixels. A fraction is allowed; 0 keeps
                     every cover. Default 0.25
-    -n, --dry-run   Only list the files that would be looked for; nothing is
-                    searched or written.
+    -n, --dry-run   Only list the files and albums that would be looked for;
+                    nothing is searched or written.
+    -s, --sidecar   Write the cover found for a file that is no album track
+                    beside it, as an image named after it (track.jpg),
+                    rather than embedding it in a copy.
+    -t, --per-track Look for an album's tracks one by one, like any other file,
+                    rather than for the album once as its folder.jpg.
+    -z, --min-size <megabytes>
+                    Leave alone a file smaller than this; an album is not
+                    held to it, its tracks are under -t. A fraction is
+                    allowed. Default 0, every size.
     -A, --ai        Let language models help (docs/models.md). Without -A no
                     step asks one; the commands this one starts are handed it.
     -v, --verbose   Also say why each item was handled the way it was, and on a
