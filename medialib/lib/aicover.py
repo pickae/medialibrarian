@@ -224,6 +224,17 @@ def _music_line(subject: onlinecover.Subject) -> str:
     return ". Probably: " + "; ".join("%s %s" % pair for pair in named)
 
 
+def _folders_line(folders: Sequence[str] | None, parents: Sequence[str]) -> str:
+    """The line saying where a recording lies: every folder below the one
+    the run was given down to its own, where the run gave one - the last of
+    them its own folder - else the few ``parents`` it sits in."""
+    if folders is not None:
+        return ("Where it lies below the folder the run was given, outermost "
+                "first: %s" % (" / ".join(folders) or "(in that folder itself)"))
+    return "The folders it sits in, outermost first: %s" % (
+        " / ".join(parents) or "(none)")
+
+
 def account(input_path: str, output_name: str, tracks: Sequence[str],
             subject: onlinecover.Subject,
             probe: Callable[[str], dict] = onlinecover.probe_tags) -> list[str]:
@@ -240,9 +251,8 @@ def account(input_path: str, output_name: str, tracks: Sequence[str],
         content += ", because of %s" % subject.why
     content += _music_line(subject)
     return [
-        "## The input folder\n\nIts name: %s\nThe folders it sits in, outermost "
-        "first: %s\n\nIts files:\n%s" % (
-            os.path.basename(folder), " / ".join(parents) or "(none)",
+        "## The input folder\n\nIts name: %s\n%s\n\nIts files:\n%s" % (
+            os.path.basename(folder), _folders_line(subject.folders, parents),
             "\n".join("- " + line for line in _listing(input_path))),
         "## The tags inside the audio files\n\n%s" % (
             "\n".join(_tag_lines(input_path, tracks, probe)) or "(no audio files)"),
@@ -349,14 +359,13 @@ def track_prompt(source: str, subject: onlinecover.Subject,
     sections = [
         "Find the cover image for this recording.",
         "## The episode\n\nShow: %s\nEpisode title: %s\nDate: %s\n"
-        "File: %s\nParent folder: %s\nThe folders it sits in, outermost "
-        "first: %s" % (
+        "File: %s\nParent folder: %s\n%s" % (
             "; ".join(shows) or "(none)",
             episode or "(none)",
             date or "(none)",
             name,
             parent or "(none)",
-            " / ".join(parents) or "(none)"),
+            _folders_line(subject.folders, parents)),
         "## The tags inside the audio file\n\n%s" % tag_block,
         "## What it probably is\n\nProvisionally, and not certainly: %s.%s\n"
         "Titles it may go by, likeliest first: %s\nWho may have made it: %s\n"

@@ -269,6 +269,10 @@ def validate(letter: str, value: str, tables: Tables) -> None:
         if _POS_NUM.fullmatch(value) and float(value) > 0:
             return
         wanted = "a number above 0, a fraction allowed (e.g. 0.5)"
+    elif kind == "nonNegNum":
+        if _POS_NUM.fullmatch(value):
+            return
+        wanted = "a number of 0 or more, a fraction allowed (e.g. 0.5)"
     elif kind == "nonNegInt":
         if _NON_NEG_INT.fullmatch(value):
             return

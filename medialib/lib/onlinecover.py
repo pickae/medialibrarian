@@ -385,6 +385,10 @@ class Subject:
     composer: str = ""
     # The label a folder names its performance by - "(Nordlabel, 1972)".
     label: str = ""
+    # The folders it lies in below the one the run was given, outermost
+    # first, down to its own folder: "Artist / Album / CD1". None where the
+    # run gave no such folder; [] where it lies in that folder itself.
+    folders: list[str] | None = None
 
     @property
     def title(self) -> str:
@@ -951,6 +955,35 @@ def has_embedded_cover(path: str) -> bool:
     return "video" in kinds or "attachment" in kinds
 
 
+def embedded_cover_size(path: str) -> tuple[int, int]:
+    """The width and height of the largest picture ``path`` carries as an
+    attached-picture stream, or (0, 0) when it carries none or ffprobe cannot
+    tell - a Matroska attachment among them."""
+    try:
+        done = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL)
+    except OSError:
+        return 0, 0
+    return largest_size(done.stdout.decode("utf-8", "replace"))
+
+
+def largest_size(text: str) -> tuple[int, int]:
+    """The (width, height) with the most pixels among lines of "W,H" or
+    "W H", or (0, 0) when no line is one."""
+    best = (0, 0)
+    for line in text.splitlines():
+        words = line.replace(",", " ").split()
+        if len(words) < 2 or not (words[0].isdigit() and words[1].isdigit()):
+            continue
+        size = (int(words[0]), int(words[1]))
+        if size[0] * size[1] > best[0] * best[1]:
+            best = size
+    return best
+
+
 def media_seconds(path: str) -> float:
     try:
         done = subprocess.run(
@@ -979,6 +1012,39 @@ def media_channels(path: str) -> int:
 
 # --- concat-audio ----------------------------------------------------------------------
 
+def folders_below(root: str, folder: str) -> list[str] | None:
+    """The folders from ``root`` down to ``folder``, ``root`` itself left
+    out and ``folder`` kept, outermost first: [] for ``root`` itself, None
+    when there is no ``root`` or ``folder`` does not lie in it."""
+    if not root:
+        return None
+    relative = os.path.relpath(os.path.normpath(folder), os.path.normpath(root))
+    if relative == os.curdir:
+        return []
+    parts = relative.split(os.sep)
+    if parts[0] == os.pardir:
+        return None
+    return parts
+
+
+def _ancestors(folders: list[str] | None) -> list[str]:
+    """The folders above the last of ``folders``, nearest first: names that
+    may be its maker or its series."""
+    return list(reversed(folders[:-1])) if folders else []
+
+
+# A folder holding one disc of an album that runs to several: "CD1",
+# "CD 02", "Disc 2", "Disk 1", "cd-3". Its name says nothing of the album,
+# which the folder above it names.
+_DISC_FOLDER = re.compile(r"^\s*(?:cd|dis[ck])\s*[-_. ]?\s*\d{1,2}\s*$",
+                          re.IGNORECASE)
+
+
+def is_disc_folder(name: str) -> bool:
+    """Whether a folder called ``name`` holds one disc of an album."""
+    return bool(_DISC_FOLDER.match(name))
+
+
 def _refine_content(subject: Subject, name: str, *,
                     folder_path: str, tracks: Sequence[str],
                     seconds: float, stereo: bool,
@@ -995,7 +1061,7 @@ def _refine_content(subject: Subject, name: str, *,
         seconds=seconds, stereo=stereo,
         heuristic=(subject.content, subject.why),
         list_folder=list_folder, classifiers=classifiers,
-        meter_file=meter_file, probe=probe)
+        meter_file=meter_file, probe=probe, folders=subject.folders)
     if classified is not None:
         subject.content, subject.why = classified
 
@@ -1024,25 +1090,37 @@ def book_subject(input_path: str, tracks: Sequence[str], seconds: float,
                  stereo: bool = False,
                  probe: Callable[[str], dict] | None = None, *,
                  meter_file: str = "",
-                 classifiers: Sequence[Any] | None = None) -> Subject:
+                 classifiers: Sequence[Any] | None = None,
+                 root: str = "") -> Subject:
     """What the book joined from ``input_path`` is looked for as: its folder's
     name, the first track's tags (read by ``probe``, ffprobe unless given),
     the folder above as a possible author. When content classification by a
     language model is enabled and available, its verdict refines the content
     kind before the catalogue search runs (except for a YouTube id, which
-    fetches that video's own thumbnail directly)."""
+    fetches that video's own thumbnail directly).
+
+    A folder named for one disc ("CD1") is looked for by the folder above
+    it, the album, and the one above that as its maker. ``root`` is the
+    folder the run was given: every folder between it and ``input_path`` is
+    a possible maker too, and is told the models that are asked."""
     folder = os.path.basename(os.path.normpath(input_path))
     source = source_folder(input_path)
     tag_reader = probe or probe_tags
     tags = tag_reader(tracks[0]) if tracks else {}
-    parent = os.path.basename(os.path.dirname(os.path.normpath(source)))
+    above = os.path.dirname(os.path.normpath(source))
+    parent = os.path.basename(above)
+    if is_disc_folder(folder) and parent:
+        folder, parent = parent, os.path.basename(os.path.dirname(above))
+    folders = folders_below(root, input_path)
     subject = subject_for(
         folder, seconds,
         tag_titles=[tags.get("album", "")],
         tag_creators=[tags.get("album_artist", ""), tags.get("artist", ""),
                       tags.get("composer", "")],
-        guessed_creators=[parent],
+        guessed_creators=[parent, *(name for name in _ancestors(folders)
+                                    if name != folder)],
         stereo=stereo)
+    subject.folders = folders
     if subject.youtube_id or _dated(folder):
         return subject
     sampled = [tags]
@@ -1177,12 +1255,15 @@ def track_subject(source: str, seconds: float, stereo: bool = False,
                   probe: Callable[[str], dict] | None = None,
                   tags: dict[str, str] | None = None, *,
                   meter_file: str = "",
-                  classifiers: Sequence[Any] | None = None) -> Subject:
+                  classifiers: Sequence[Any] | None = None,
+                  root: str = "") -> Subject:
     """What a single track at ``source`` is looked for as: its stem, its tags
     (read by ``probe``, ffprobe unless given, or taken from ``tags``), and its
     parent folder. When content classification by a language model is enabled
     and available, its verdict refines the content kind before the catalogue
-    search runs (except for a YouTube id)."""
+    search runs (except for a YouTube id). ``root`` is the folder the run was
+    given: every folder between it and the track's own is a possible maker
+    too, and is told the models that are asked."""
     stem = os.path.splitext(os.path.basename(source))[0]
     tag_reader: Callable[[str], dict]
     if tags is None:
@@ -1193,13 +1274,16 @@ def track_subject(source: str, seconds: float, stereo: bool = False,
 
         def tag_reader(_path: str) -> dict:
             return known_tags
+    folders = folders_below(root, os.path.dirname(source))
     subject = subject_for(
         stem, seconds,
         tag_titles=[tags.get("title", "")],
         tag_creators=[tags.get("album_artist", ""), tags.get("artist", "")],
         guessed_creators=[tags.get("album", ""),
-                          os.path.basename(os.path.dirname(source))],
+                          os.path.basename(os.path.dirname(source)),
+                          *_ancestors(folders)],
         stereo=stereo)
+    subject.folders = folders
     if not subject.youtube_id:
         _refine_content(
             subject, stem, folder_path=os.path.dirname(source),
@@ -1212,15 +1296,18 @@ def track_subject(source: str, seconds: float, stereo: bool = False,
 def track_image(source: str, seconds: float, dest_dir: str,
                 search: CoverSearch | None = None, *,
                 stereo: bool = False, meter_file: str = "",
-                classifiers: Sequence[Any] | None = None) -> str:
+                classifiers: Sequence[Any] | None = None,
+                root: str = "") -> str:
     """An image found for the track at ``source``, saved in ``dest_dir``
     with its own extension, or "": the catalogues first, then
     :func:`medialib.lib.aicover.track_cover`, which asks a model only under
     -A. Asked whatever the track is - whether it is worth asking is the
-    caller's to decide."""
+    caller's to decide. ``root`` is the folder the run was given - see
+    :func:`track_subject`."""
     tags = probe_tags(source)
     subject = track_subject(source, seconds, stereo=stereo, tags=tags,
-                            meter_file=meter_file, classifiers=classifiers)
+                            meter_file=meter_file, classifiers=classifiers,
+                            root=root)
     image = _search(subject, os.path.join(dest_dir, "online"), search)
     if not image:
         from medialib.lib import aicover
