@@ -262,9 +262,12 @@ class TestFound:
         assert run.tally.unwritten == [os.path.join("a", "01.mp3")]
         assert os.listdir(tmp_path / "out/a") == []
 
+    # 400x400 has more pixels than the 300x300 it would replace, but is still
+    # under the minimum, so it is not written either.
     @pytest.mark.parametrize("found_size,written", [
-        ((1000, 1000), True), ((300, 300), False), ((0, 0), False)])
-    def test_a_small_cover_is_replaced_only_by_a_larger_one(
+        ((1000, 1000), True), ((400, 400), False), ((300, 300), False),
+        ((0, 0), False)])
+    def test_a_small_cover_is_replaced_only_by_one_above_the_minimum(
             self, tmp_path, found, monkeypatch, found_size, written):
         monkeypatch.setattr(find_covers, "image_size", lambda _p: found_size)
         _touch(tmp_path, "in/a/01.mp3", "in/a/02.mp3", data=b"audio")
@@ -277,7 +280,32 @@ class TestFound:
                      str(scratch))
         assert (tmp_path / "out/a/01.mp3").exists() == written
         assert run.tally.embedded == ([relative] if written else [])
-        assert run.tally.no_larger == ([] if written else [relative])
+        assert run.tally.too_small == ([] if written else [relative])
+
+    # A size that cannot be read is written where there is no cover to lose.
+    @pytest.mark.parametrize("found_size,written", [
+        ((600, 600), True), ((400, 400), False), ((0, 0), True)])
+    def test_a_file_without_a_cover_gets_none_under_the_minimum(
+            self, tmp_path, found, monkeypatch, found_size, written):
+        monkeypatch.setattr(find_covers, "image_size", lambda _p: found_size)
+        _touch(tmp_path, "in/a/01.mp3", "in/a/02.mp3", data=b"audio")
+        relative = os.path.join("a", "01.mp3")
+        run = _run(tmp_path, QUARTER_MP)
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        run._find_in(relative, os.path.join(run.input_dir, relative),
+                     str(scratch))
+        assert (tmp_path / "out/a/01.mp3").exists() == written
+        assert run.tally.too_small == ([] if written else [relative])
+
+    def test_without_a_minimum_any_cover_found_is_written(
+            self, tmp_path, found, monkeypatch):
+        def unmeasured(_path):
+            raise AssertionError("no size is read without a minimum")
+        monkeypatch.setattr(find_covers, "image_size", unmeasured)
+        _touch(tmp_path, "in/a/01.mp3", "in/a/02.mp3", data=b"audio")
+        run = self._find(tmp_path, os.path.join("a", "01.mp3"))
+        assert run.tally.embedded == [os.path.join("a", "01.mp3")]
 
     def test_nothing_found_writes_nothing(self, tmp_path, found, monkeypatch):
         monkeypatch.setattr(onlinecover, "track_image", lambda *a, **k: "")
@@ -338,7 +366,17 @@ class TestFound:
         scratch = tmp_path / "scratch"
         scratch.mkdir()
         run._find_in("Album", str(tmp_path / "in/Album"), str(scratch))
-        assert run.tally.no_larger == ["Album"]
+        assert run.tally.too_small == ["Album"]
+        assert not (tmp_path / "out/Album").exists()
+
+    def test_an_album_without_a_cover_gets_none_under_the_minimum(
+            self, tmp_path, found, monkeypatch):
+        monkeypatch.setattr(find_covers, "image_size", lambda _p: (400, 400))
+        _touch(tmp_path, "in/Album/01.mp3", "in/Album/02.mp3")
+        run = self._find_album(tmp_path, "Album", ["01.mp3", "02.mp3"],
+                               min_pixels=QUARTER_MP)
+        assert run.tally.too_small == ["Album"]
+        assert run.tally.beside == []
         assert not (tmp_path / "out/Album").exists()
 
     def test_a_sidecar_is_named_after_its_file(self, tmp_path, found):

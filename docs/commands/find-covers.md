@@ -63,14 +63,15 @@ written beside where the file lies, as an image named after it — `track.jpg`
 
 A cover under **0.25 megapixels** (smaller than 500×500) does not count:
 whether it is embedded or the image beside the file or album, it is looked for
-anyway, to replace it. What is found is written only when it has more pixels
-than the cover it has; otherwise nothing is written for it, and the run lists
-it under what nothing larger was found for. A cover whose size cannot be read
-is kept.
+anyway, to replace it. The same threshold holds for what is found: a cover
+under 0.25 megapixels is never written. A small cover is therefore not replaced
+by another small one, even a slightly larger one, and a file or album without a
+cover gets none when only small ones are found. The run lists these under what
+only a small cover was found for. A cover whose size cannot be read is kept.
 
 `-m <megapixels>` moves the threshold — `-m 1` looks past anything under
 1000×1000, `-m 0.09` only past covers under 300×300 — and `-m 0` keeps every
-cover, whatever its size.
+cover and writes any found, whatever its size.
 
 Unlike [`convert-audio`](convert-audio.md#cover-art), there is no rule that
 leaves album tracks out, since nothing is written next to the input. `-n`

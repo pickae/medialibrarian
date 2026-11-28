@@ -21,9 +21,9 @@ Options:
                     allowed. Default 0, every length.
     -m, --min-megapixels <megapixels>
                     A cover smaller than this - embedded, or the image
-                    beside the file - is looked to be replaced, and only by
-                    one with more pixels. A fraction is allowed; 0 keeps
-                    every cover. Default 0.25
+                    beside the file - is looked to be replaced, and one
+                    found smaller than this is not written. A fraction is
+                    allowed; 0 keeps and writes any cover. Default 0.25
     -n, --dry-run   Only list the files and albums that would be looked for;
                     nothing is searched or written.
     -s, --sidecar   Write the cover found for a file that is no album track

@@ -21,7 +21,8 @@ embedded in a copy of the file, or under -s written beside it as an image
 named after it.
 
 A cover smaller than -m megapixels is overlooked: the file or album is then
-looked for, and what is found written only when it has more pixels.
+looked for. What is found is never written when it is smaller than -m
+megapixels itself - neither to replace a small cover nor where there is none.
 
 Everything is written at its own relative path under <outputDir>, so what was
 found can be looked at before anything is moved back. A format that cannot
@@ -82,9 +83,9 @@ l | <minutes> | Leave alone a file shorter than this; an album is not
                     held to it, its tracks are under -t. A fraction is
                     allowed. Default 0, every length.
 m | <megapixels> | A cover smaller than this - embedded, or the image
-                    beside the file - is looked to be replaced, and only by
-                    one with more pixels. A fraction is allowed; 0 keeps
-                    every cover. Default {minimum}
+                    beside the file - is looked to be replaced, and one
+                    found smaller than this is not written. A fraction is
+                    allowed; 0 keeps and writes any cover. Default {minimum}
 n |  | Only list the files and albums that would be looked for;
                     nothing is searched or written.
 s |  | Write the cover found for a file that is no album track
@@ -109,8 +110,8 @@ OPT_COLUMN = 20
 OPT_LONG = ("h:help i:ignore-folder-covers l:min-length m:min-megapixels "
             "n:dry-run s:sidecar t:per-track z:min-size")
 
-# A cover with fewer megapixels than this is looked to be replaced: 500x500
-# and up is kept.
+# A cover with fewer megapixels than this is looked to be replaced, and one
+# found with fewer is not written: 500x500 and up is kept.
 DEFAULT_MIN_MEGAPIXELS = 0.25
 
 # What the found image is recompressed to before it is embedded: the figures
@@ -321,7 +322,7 @@ class Tally:
     beside: list[str] = field(default_factory=list)
     unwritten: list[str] = field(default_factory=list)
     missed: list[str] = field(default_factory=list)
-    no_larger: list[str] = field(default_factory=list)
+    too_small: list[str] = field(default_factory=list)
     cannot_carry: int = 0
     own_cover: int = 0
     folder_cover: int = 0
@@ -337,7 +338,8 @@ class Run:
     ram_dir: str
     model_meter: str
     resolution: str
-    # A cover with fewer pixels than this is looked to be replaced; 0 never.
+    # A cover with fewer pixels than this is looked to be replaced, and one
+    # found with fewer is not written; 0 never.
     min_pixels: int = 0
     # Whether a file that is no album track has its cover written beside it
     # rather than embedded.
@@ -535,15 +537,12 @@ class Run:
             self.tally.missed.append(relative)
             return
 
-        small = self.replacing.get(relative)
-        if small:
-            size = image_size(found)
-            if _pixels(size) <= _pixels(small):
-                runlog.detail("    %s: the cover found, %s, is no larger than "
-                              "its own %s" % (self.label(relative),
-                                              _shown(size), _shown(small)))
-                self.tally.no_larger.append(relative)
-                return
+        why = self.unworthy(relative, found)
+        if why:
+            runlog.detail("    %s: the cover found, %s"
+                          % (self.label(relative), why))
+            self.tally.too_small.append(relative)
+            return
 
         if album:
             self._write_beside(relative, found, relative, ALBUM_COVER_STEM)
@@ -552,6 +551,23 @@ class Run:
                                _stem(relative))
         else:
             self._embed(relative, source, found, scratch)
+
+    def unworthy(self, relative: str, found: str) -> str:
+        """Why the image ``found`` for ``relative`` is not written, or "": it
+        is under the minimum, or no larger than the small cover it would
+        replace. One whose size cannot be read is written only where there
+        is no cover to lose."""
+        small = self.replacing.get(relative)
+        if not self.min_pixels and not small:
+            return ""
+        size = image_size(found)
+        if self.too_small(size):
+            return "%s, is under %s megapixels" % (
+                _shown(size), _figure(self.min_pixels / 1e6))
+        if small and _pixels(size) <= _pixels(small):
+            return "%s, is no larger than its own %s" % (_shown(size),
+                                                         _shown(small))
+        return ""
 
     def _write_beside(self, relative: str, found: str, folder: str,
                       stem: str) -> None:
@@ -624,9 +640,10 @@ def report(run: Run, looked_for: list[str]) -> None:
         log("No cover found for:")
         for relative in tally.missed:
             log("  " + run.label(relative))
-    if tally.no_larger:
-        log("Nothing larger than the small cover it has found for:")
-        for relative in tally.no_larger:
+    if tally.too_small:
+        log("Only a cover under %s megapixels found for:"
+            % _figure(run.min_pixels / 1e6))
+        for relative in tally.too_small:
             log("  " + run.label(relative))
     if tally.unwritten:
         log("A cover found but not written for:")
@@ -655,8 +672,8 @@ def report(run: Run, looked_for: list[str]) -> None:
         written.append("%d written as an image" % len(tally.beside))
     written.append("%d not written" % len(tally.unwritten))
     written.append("%d not found" % len(tally.missed))
-    if tally.no_larger:
-        written.append("%d no larger" % len(tally.no_larger))
+    if tally.too_small:
+        written.append("%d too small" % len(tally.too_small))
     runlog.result("Looked for %s: %s%s."
                   % (what, ", ".join(written),
                      ("; skipped: " + ", ".join(skipped)) if skipped else ""))
